@@ -1,5 +1,5 @@
 import unittest
-from calculator import add, subtract, multiply, divide
+from logic import add, subtract, multiply, divide, power, sqrt
 
 class TestCalculator(unittest.TestCase):
 
@@ -30,7 +30,21 @@ class TestCalculator(unittest.TestCase):
         self.assertEqual(divide(-10, -2), 5)
         self.assertEqual(divide(5, 2), 2.5)
         self.assertEqual(divide(0, 1), 0)
-        self.assertEqual(divide(10, 0), "Error! Division by zero.")
+        with self.assertRaises(ValueError):
+            divide(10, 0)
+
+    def test_power(self):
+        self.assertEqual(power(2, 3), 8)
+        self.assertEqual(power(5, 0), 1)
+        self.assertEqual(power(-2, 3), -8)
+        self.assertEqual(power(4, 0.5), 2)
+
+    def test_sqrt(self):
+        self.assertEqual(sqrt(16), 4)
+        self.assertEqual(sqrt(0), 0)
+        self.assertAlmostEqual(sqrt(2), 1.41421356, places=7)
+        with self.assertRaises(ValueError):
+            sqrt(-1)
 
 if __name__ == '__main__':
     unittest.main()
