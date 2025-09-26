@@ -1,69 +1,130 @@
 document.addEventListener('DOMContentLoaded', () => {
     const display = document.getElementById('display');
-    const buttons = document.querySelector('.buttons');
-    let currentExpression = '';
+    const buttonsGrid = document.querySelector('.buttons-grid');
+
+    let currentInput = '0';
     let isResultDisplayed = false;
 
-    buttons.addEventListener('click', (e) => {
-        if (!e.target.matches('.btn')) return;
+    const updateDisplay = () => {
+        // Replace operators for better readability
+        const formattedInput = currentInput
+            .replace(/\*/g, '×')
+            .replace(/\//g, '÷')
+            .replace(/\*\*/g, '^');
+        display.value = formattedInput;
+    };
 
-        const value = e.target.dataset.value;
-
+    const handleButtonPress = (value) => {
         if (value === 'C') {
-            currentExpression = '';
-            display.textContent = '0';
+            currentInput = '0';
+            isResultDisplayed = false;
+        } else if (value === 'Backspace') {
+            if (currentInput.length > 1) {
+                currentInput = currentInput.slice(0, -1);
+            } else {
+                currentInput = '0';
+            }
             isResultDisplayed = false;
         } else if (value === '=') {
-            if (currentExpression === '') return;
-            calculate(currentExpression);
+            if (currentInput) {
+                calculate(currentInput);
+            }
         } else {
             if (isResultDisplayed) {
-                const operators = ['+', '-', '*', '/', '**'];
-                if (operators.includes(value)) {
-                    // If an operator is pressed, continue with the result
-                } else if (value === '(' && currentExpression.slice(-1) === ')') {
-                    // If the result is a function call, start a new expression
-                    currentExpression = '';
-                }
-                else {
-                    // Otherwise, start a new expression
-                    currentExpression = '';
+                // If the previous result is on display, decide what to do
+                const isOperator = ['+', '-', '*', '/', '**', '^'].includes(value);
+                if (isOperator) {
+                    // Start new calculation with previous result
+                } else {
+                    // Start a fresh calculation
+                    currentInput = '';
                 }
                 isResultDisplayed = false;
             }
 
-            if (display.textContent === '0' && value !== '.') {
-                currentExpression = value;
+            if (currentInput === '0' && value !== '.') {
+                currentInput = value;
             } else {
-                currentExpression += value;
+                currentInput += value;
             }
-            display.textContent = currentExpression;
+        }
+        updateDisplay();
+    };
+
+    buttonsGrid.addEventListener('click', (e) => {
+        if (e.target.matches('.btn')) {
+            e.preventDefault();
+            const value = e.target.dataset.value;
+            handleButtonPress(value);
         }
     });
 
-    async function calculate(expression) {
+    const calculate = async (expression) => {
+        // Sanitize expression for backend
+        const sanitizedExpression = expression.replace(/×/g, '*').replace(/÷/g, '/').replace(/−/g, '-').replace(/\^/g, '**');
+
         try {
             const response = await fetch('/calculate', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ expression: expression }),
+                body: JSON.stringify({ expression: sanitizedExpression }),
             });
 
             const data = await response.json();
 
             if (response.ok) {
-                display.textContent = data.result;
-                currentExpression = String(data.result);
+                currentInput = String(data.result);
                 isResultDisplayed = true;
             } else {
-                display.textContent = 'Error';
-                currentExpression = '';
+                currentInput = data.error || 'Error';
+                isResultDisplayed = true;
             }
         } catch (error) {
-            display.textContent = 'Error';
-            currentExpression = '';
+            currentInput = 'Network Error';
+            isResultDisplayed = true;
         }
-    }
+        updateDisplay();
+    };
+
+    // --- Keyboard Support ---
+    document.addEventListener('keydown', (e) => {
+        e.preventDefault();
+        const key = e.key;
+        let value = '';
+
+        if (key >= '0' && key <= '9') {
+            value = key;
+        } else if (key === '.') {
+            value = '.';
+        } else if (key === '+') {
+            value = '+';
+        } else if (key === '-') {
+            value = '-';
+        } else if (key === '*') {
+            value = '*';
+        } else if (key === '/') {
+            value = '/';
+        } else if (key === '^') {
+            value = '**';
+        } else if (key === '(') {
+            value = '(';
+        } else if (key === ')') {
+            value = ')';
+        } else if (key === 'Enter' || key === '=') {
+            value = '=';
+        } else if (key === 'Backspace') {
+            value = 'Backspace';
+        } else if (key.toLowerCase() === 'c') {
+            value = 'C';
+        }
+
+        if (value) {
+            handleButtonPress(value);
+        }
+    });
+
+    // Initial display update
+    updateDisplay();
 });
