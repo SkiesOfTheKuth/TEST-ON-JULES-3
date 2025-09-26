@@ -1,51 +1,41 @@
 # Advanced Calculator Project
 
-This project is a feature-rich calculator application available in three different interfaces: a modern web application, a desktop GUI application, and a command-line interface (CLI). It is built with Python and features a robust evaluation engine that supports a wide range of mathematical functions and constants.
+This project is a multi-interface calculator application that provides a web-based UI, a command-line interface (CLI), and a graphical user interface (GUI). It supports a wide range of mathematical operations, from basic arithmetic to scientific functions.
 
 ## Features
 
 - **Multiple Interfaces**:
-  - **Web Calculator**: A responsive, modern web interface built with Flask and vanilla JavaScript.
-  - **GUI Calculator**: A desktop application built with Python's Tkinter library.
-  - **CLI Calculator**: A simple command-line interface for quick calculations.
-
-- **Extended Mathematical Functions**:
+  - **Web Calculator**: A modern, user-friendly web interface built with Flask.
+  - **Command-Line Calculator**: An interactive CLI for quick calculations.
+  - **GUI Calculator**: A desktop application built with Tkinter.
+- **Scientific Functions**:
   - Basic arithmetic: `+`, `-`, `*`, `/`
-  - Exponents (`**` or `^`) and square roots (`sqrt`)
-  - Trigonometric functions (in degrees): `sind`, `cosd`, `tand`
-  - Inverse trigonometric functions: `asin`, `acos`, `atan`
-  - Hyperbolic functions: `sinh`, `cosh`, `tanh`
-  - Logarithms: Natural (`log`) and base-10 (`log10`)
-  - Factorials (`factorial`)
-  - Mathematical constants: `pi` and `e`
-
-- **Robust Error Handling**: The calculator provides clear error messages for invalid syntax, logical errors (e.g., division by zero), and undefined functions.
-
-- **User-Friendly Design**:
-  - The web and GUI interfaces are designed to be intuitive and easy to use.
-  - The web calculator includes keyboard support for a faster workflow.
+  - Power and square root: `power()`, `sqrt()`
+  - Trigonometric functions: `sin()`, `cos()`, `tan()` (input in degrees)
+  - Logarithmic functions: `log()` (natural), `log10()` (base-10)
+  - Factorial: `factorial()`
+  - Percentage: `percentage()`
 
 ## Project Structure
 
 ```
 .
-├── app.py              # Flask backend for the web calculator
-├── calculator.py       # Command-line interface (CLI) calculator
-├── gui_calculator.py   # Desktop GUI calculator application
-├── logic.py            # Core mathematical functions and logic
-├── evaluator.py        # asteval interpreter setup
-├── static/             # Static assets for the web app (CSS, JS)
-│   ├── style.css
-│   └── script.js
-├── templates/          # HTML templates for the Flask app
-│   └── index.html
-├── test_app.py         # Tests for the Flask application
-└── test_logic.py       # Unit tests for the core logic
+├── app.py                  # Flask web application
+├── calculator.py           # Command-line interface
+├── gui_calculator.py       # GUI application
+├── logic.py                # Core mathematical functions
+├── test_calculator.py      # Unit tests for logic.py
+├── test_app.py             # Functional tests for the Flask app
+├── templates/
+│   └── index.html          # HTML for the web interface
+├── static/
+│   ├── style.css           # CSS for the web interface
+│   └── script.js           # JavaScript for the web interface
+├── requirements.txt        # Project dependencies
+└── README.md               # This file
 ```
 
 ## Setup and Installation
-
-To run this project, you'll need Python 3 and the following libraries.
 
 1.  **Clone the repository**:
     ```bash
@@ -55,48 +45,45 @@ To run this project, you'll need Python 3 and the following libraries.
 
 2.  **Create a virtual environment** (recommended):
     ```bash
-    python -m venv venv
+    python3 -m venv venv
     source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
     ```
 
-3.  **Install the required packages**:
-    The project requires `Flask` for the web server and `asteval` for expression evaluation.
+3.  **Install the dependencies**:
     ```bash
-    pip install Flask asteval
+    pip install -r requirements.txt
     ```
 
-## How to Run the Calculators
+## How to Run
 
-You can run any of the three calculator interfaces.
+### Web Calculator
 
-### 1. Web Calculator
-
-To start the web server, run:
+To start the Flask development server:
 ```bash
-python app.py
+flask run
+# or
+python3 app.py
 ```
-The application will be available at `http://127.0.0.1:5000`. Open this URL in your web browser to use the calculator.
+Open your web browser and navigate to `http://127.0.0.1:5000`.
 
-### 2. GUI Calculator
+### Command-Line Calculator
 
-To launch the desktop application, run:
+To run the interactive command-line calculator:
 ```bash
-python gui_calculator.py
+python3 calculator.py
 ```
-This will open a window with the calculator interface.
 
-### 3. Command-Line (CLI) Calculator
+### GUI Calculator
 
-To use the CLI version, run:
+To launch the desktop GUI application:
 ```bash
-python calculator.py
+python3 gui_calculator.py
 ```
-You can then type mathematical expressions directly into the terminal. Enter `quit` to exit.
 
-## Running Tests
+## How to Run Tests
 
-To ensure everything is working correctly, you can run the automated tests:
+To run all the tests for the project, use the `run_tests.py` script:
 ```bash
-python -m unittest discover
+python3 run_tests.py
 ```
-This command will discover and run all tests in `test_app.py` and `test_logic.py`.
+This will automatically discover and run all tests, confirming that the logic and application endpoints are working correctly.

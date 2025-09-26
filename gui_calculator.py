@@ -1,144 +1,106 @@
 import tkinter as tk
 from tkinter import font
-from evaluator import create_evaluator
+from engine import create_evaluator
 
-class ModernCalculatorApp(tk.Tk):
+class CalculatorApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Modern Calculator")
-        self.geometry("480x640")
-        self.configure(bg="#f0f2f5")
+        self.title("Calculator")
+        self.geometry("500x700")
+        self.resizable(True, True)
 
-        self.expression = "0"
+        self.evaluator = create_evaluator()
+
+        self.expression = ""
         self.create_widgets()
-        self.bind_keyboard_events()
 
     def create_widgets(self):
-        # --- Font Configuration ---
-        display_font = font.Font(family='Segoe UI', size=36, weight='bold')
-        button_font = font.Font(family='Segoe UI', size=14)
-        function_font = font.Font(family='Segoe UI', size=12)
-
         # --- Display Screen ---
-        self.display_var = tk.StringVar(value=self.expression)
-        display_entry = tk.Entry(
-            self, textvariable=self.display_var, font=display_font,
-            bg="#222a37", fg="#ffffff", bd=0, relief="flat", justify='right',
-            insertbackground="#ffffff"
-        )
-        display_entry.grid(row=0, column=0, columnspan=5, sticky="nsew", padx=10, pady=20, ipady=10)
-        display_entry.focus()
+        display_font = font.Font(family='Helvetica', size=36, weight='bold')
+        self.display_var = tk.StringVar()
+        display = tk.Entry(self, textvariable=self.display_var, font=display_font, bd=10, insertwidth=2, width=14, borderwidth=4, relief="ridge", justify='right')
+        display.grid(row=0, column=0, columnspan=5, ipady=20, sticky="nsew")
 
-        # --- Button Definitions ---
+        # --- Button Frame ---
+        button_frame = tk.Frame(self, bg="#f0f0f0")
+        button_frame.grid(row=1, column=0, columnspan=5, sticky="nsew")
+
+        button_font = font.Font(family='Helvetica', size=16)
+
         buttons = [
-            # Row 1: Functions
-            {'text': 'sin', 'value': 'sind(', 'font': function_font, 'bg': '#e9ecef'},
-            {'text': 'cos', 'value': 'cosd(', 'font': function_font, 'bg': '#e9ecef'},
-            {'text': 'tan', 'value': 'tand(', 'font': function_font, 'bg': '#e9ecef'},
-            {'text': 'ln', 'value': 'log(', 'font': function_font, 'bg': '#e9ecef'},
-            {'text': '√', 'value': 'sqrt(', 'font': button_font, 'bg': '#e9ecef'},
-
-            # Row 2: Functions
-            {'text': 'asin', 'value': 'asin(', 'font': function_font, 'bg': '#e9ecef'},
-            {'text': 'acos', 'value': 'acos(', 'font': function_font, 'bg': '#e9ecef'},
-            {'text': 'atan', 'value': 'atan(', 'font': function_font, 'bg': '#e9ecef'},
-            {'text': 'log10', 'value': 'log10(', 'font': function_font, 'bg': '#e9ecef'},
-            {'text': 'n!', 'value': 'factorial(', 'font': button_font, 'bg': '#e9ecef'},
-
-            # Row 3: Constants & Operators
-            {'text': 'π', 'value': 'pi', 'font': button_font, 'bg': '#ffc107', 'fg': '#fff'},
-            {'text': 'e', 'value': 'e', 'font': button_font, 'bg': '#ffc107', 'fg': '#fff'},
-            {'text': '(', 'value': '(', 'font': button_font, 'bg': '#e9ecef'},
-            {'text': ')', 'value': ')', 'font': button_font, 'bg': '#e9ecef'},
-            {'text': '^', 'value': '**', 'font': button_font, 'bg': '#ffc107', 'fg': '#fff'},
-
-            # Row 4: Numpad
-            {'text': '7', 'value': '7', 'font': button_font},
-            {'text': '8', 'value': '8', 'font': button_font},
-            {'text': '9', 'value': '9', 'font': button_font},
-            {'text': '÷', 'value': '/', 'font': button_font, 'bg': '#ffc107', 'fg': '#fff'},
-            {'text': 'C', 'value': 'C', 'font': button_font, 'bg': '#dc3545', 'fg': '#fff'},
-
-            # Row 5: Numpad
-            {'text': '4', 'value': '4', 'font': button_font},
-            {'text': '5', 'value': '5', 'font': button_font},
-            {'text': '6', 'value': '6', 'font': button_font},
-            {'text': '×', 'value': '*', 'font': button_font, 'bg': '#ffc107', 'fg': '#fff'},
-            {'text': '⌫', 'value': 'Backspace', 'font': button_font, 'bg': '#6c757d', 'fg': '#fff'},
-
-            # Row 6 & 7: Numpad
-            {'text': '1', 'value': '1', 'font': button_font},
-            {'text': '2', 'value': '2', 'font': button_font},
-            {'text': '3', 'value': '3', 'font': button_font},
-            {'text': '-', 'value': '-', 'font': button_font, 'bg': '#ffc107', 'fg': '#fff'},
-            {'text': '=', 'value': '=', 'font': button_font, 'bg': '#28a745', 'fg': '#fff', 'rowspan': 2},
-
-            {'text': '0', 'value': '0', 'font': button_font, 'colspan': 2},
-            {'text': '.', 'value': '.', 'font': button_font},
-            {'text': '+', 'value': '+', 'font': button_font, 'bg': '#ffc107', 'fg': '#fff'},
+            ('sin', 1, 0, '#6c757d'), ('cos', 1, 1, '#6c757d'), ('tan', 1, 2, '#6c757d'), ('log', 1, 3, '#6c757d'), ('log10', 1, 4, '#6c757d'),
+            ('sqrt', 2, 0, '#6c757d'), ('x!', 2, 1, '#6c757d'), ('xʸ', 2, 2, '#6c757d'), ('%', 2, 3, '#6c757d'), ('C', 2, 4, '#dc3545'),
+            ('7', 3, 0), ('8', 3, 1), ('9', 3, 2), ('/', 3, 3, '#f59e0b'), ('*', 3, 4, '#f59e0b'),
+            ('4', 4, 0), ('5', 4, 1), ('6', 4, 2), ('-', 4, 3, '#f59e0b'), ('+', 4, 4, '#f59e0b'),
+            ('1', 5, 0), ('2', 5, 1), ('3', 5, 2), ('(', 5, 3), (')', 5, 4),
+            ('0', 6, 0, None, 2), ('.', 6, 2), ('=', 6, 3, '#28a745', 2)
         ]
 
-        # --- Grid Layout ---
-        row, col = 1, 0
-        for config in buttons:
-            btn = tk.Button(
-                self, text=config['text'], font=config['font'],
-                bg=config.get('bg', '#f8f9fa'), fg=config.get('fg', '#000'),
-                bd=0, relief="flat",
-                command=lambda v=config['value']: self.on_press(v)
-            )
-            rowspan = config.get('rowspan', 1)
-            colspan = config.get('colspan', 1)
-            btn.grid(row=row, column=col, rowspan=rowspan, columnspan=colspan, sticky="nsew", padx=2, pady=2)
+        for (text, row, col, *args) in buttons:
+            bg_color = args[0] if args and args[0] else "#e0e0e0"
+            colspan = args[1] if len(args) > 1 and args[1] else 1
 
-            col += colspan
-            if col >= 5:
-                col = 0
-                row += 1
+            action = self.on_button_click
+            if text == 'C':
+                action = self.clear
+            elif text == '=':
+                action = self.calculate
 
-        # --- Grid Configuration ---
-        self.grid_rowconfigure(0, weight=2)
-        for i in range(1, 8):
-            self.grid_rowconfigure(i, weight=1)
+            # Map button text to function calls
+            func_map = {
+                'sin': 'sin(', 'cos': 'cos(', 'tan': 'tan(', 'log': 'log(', 'log10': 'log10(',
+                'sqrt': 'sqrt(', 'x!': 'factorial(', 'xʸ': 'power(',' %': 'percentage('
+            }
+
+            button_val = func_map.get(text, text)
+
+            btn = tk.Button(button_frame, text=text, font=button_font, bg=bg_color, fg='white' if bg_color != '#e0e0e0' else 'black',
+                           command=lambda v=button_val, t=text: action(v) if t in ['C', '='] else self.on_button_click(v),
+                           height=2, relief='flat', overrelief='ridge')
+            btn.grid(row=row, column=col, columnspan=colspan, sticky="nsew", padx=2, pady=2)
+
+
+        # Configure grid weights for proper scaling
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=5)
         for i in range(5):
             self.grid_columnconfigure(i, weight=1)
 
-    def on_press(self, value):
-        if value == 'C':
-            self.expression = "0"
-        elif value == 'Backspace':
-            self.expression = self.expression[:-1] if len(self.expression) > 1 else "0"
-        elif value == '=':
-            self.calculate()
-        else:
-            if self.expression == "0":
-                self.expression = value
-            else:
-                self.expression += value
+        for i in range(7):
+            button_frame.grid_rowconfigure(i, weight=1)
+        for i in range(5):
+            button_frame.grid_columnconfigure(i, weight=1)
+
+    def on_button_click(self, char):
+        """Append the character from the button to the expression string."""
+        self.expression += str(char)
         self.display_var.set(self.expression)
 
-    def calculate(self):
-        evaluator = create_evaluator()
+    def calculate(self, *args):
+        """Evaluate the expression in the display."""
         try:
-            result = evaluator.eval(self.expression)
-            if evaluator.error:
-                error_message = evaluator.error[0].get_error()[1]
-                self.display_var.set(error_message)
+            # Clear previous errors, as the interpreter is reused
+            self.evaluator.error = []
+            result = self.evaluator.eval(self.expression)
+
+            # Check if any errors occurred during evaluation
+            if self.evaluator.error:
+                self.display_var.set("Error")
+                self.expression = ""
             else:
-                self.display_var.set(str(result))
-                self.expression = str(result)
+                # Format result to avoid long decimals
+                formatted_result = f"{result:.10f}".rstrip('0').rstrip('.')
+                self.display_var.set(formatted_result)
+                self.expression = str(formatted_result)
         except Exception as e:
-            self.display_var.set(str(e))
+            self.display_var.set("Error")
             self.expression = ""
 
-    def bind_keyboard_events(self):
-        self.bind('<Return>', lambda event: self.on_press('='))
-        self.bind('<BackSpace>', lambda event: self.on_press('Backspace'))
-        self.bind('c', lambda event: self.on_press('C'))
-
-        for char in "0123456789.+-*/()":
-            self.bind(char, lambda event, c=char: self.on_press(c))
+    def clear(self, *args):
+        """Clear the display and the expression."""
+        self.expression = ""
+        self.display_var.set("0")
 
 if __name__ == "__main__":
-    app = ModernCalculatorApp()
+    app = CalculatorApp()
     app.mainloop()
