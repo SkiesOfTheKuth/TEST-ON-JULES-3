@@ -10,15 +10,24 @@ def main():
     a = asteval.Interpreter()
 
     # Add the functions from our logic module to the interpreter's symbol table
-    a.symtable['add'] = logic.add
-    a.symtable['subtract'] = logic.subtract
-    a.symtable['multiply'] = logic.multiply
-    a.symtable['divide'] = logic.divide
-    a.symtable['power'] = logic.power
-    a.symtable['sqrt'] = logic.sqrt
+    a.symtable.update({
+        'add': logic.add,
+        'subtract': logic.subtract,
+        'multiply': logic.multiply,
+        'divide': logic.divide,
+        'power': logic.power,
+        'sqrt': logic.sqrt,
+        'sin': logic.sin,
+        'cos': logic.cos,
+        'tan': logic.tan,
+        'log': logic.log,
+        'log10': logic.log10,
+        'factorial': logic.factorial,
+        'percentage': logic.percentage,
+    })
 
     print("Welcome to the advanced calculator!")
-    print("You can use functions like: add, subtract, multiply, divide, power, sqrt")
+    print("You can use functions like: add, subtract, multiply, divide, power, sqrt, sin, cos, tan, log, log10, factorial, percentage")
     print("For example: 'sqrt(16) + 5' or '(2 + 3) * 4'")
     print("Enter 'quit' to exit.")
 

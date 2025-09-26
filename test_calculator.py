@@ -1,5 +1,6 @@
 import unittest
-from logic import add, subtract, multiply, divide, power, sqrt
+import math
+from logic import add, subtract, multiply, divide, power, sqrt, sin, cos, tan, log, log10, factorial, percentage
 
 class TestCalculator(unittest.TestCase):
 
@@ -45,6 +46,57 @@ class TestCalculator(unittest.TestCase):
         self.assertAlmostEqual(sqrt(2), 1.41421356, places=7)
         with self.assertRaises(ValueError):
             sqrt(-1)
+
+    def test_sin(self):
+        self.assertAlmostEqual(sin(0), 0)
+        self.assertAlmostEqual(sin(90), 1)
+        self.assertAlmostEqual(sin(180), 0)
+        self.assertAlmostEqual(sin(270), -1)
+        self.assertAlmostEqual(sin(360), 0)
+
+    def test_cos(self):
+        self.assertAlmostEqual(cos(0), 1)
+        self.assertAlmostEqual(cos(90), 0)
+        self.assertAlmostEqual(cos(180), -1)
+        self.assertAlmostEqual(cos(270), 0)
+        self.assertAlmostEqual(cos(360), 1)
+
+    def test_tan(self):
+        self.assertAlmostEqual(tan(0), 0)
+        self.assertAlmostEqual(tan(45), 1)
+        self.assertAlmostEqual(tan(180), 0)
+
+    def test_log(self):
+        self.assertAlmostEqual(log(1), 0)
+        self.assertAlmostEqual(log(math.e), 1)
+        with self.assertRaises(ValueError):
+            log(0)
+        with self.assertRaises(ValueError):
+            log(-1)
+
+    def test_log10(self):
+        self.assertAlmostEqual(log10(1), 0)
+        self.assertAlmostEqual(log10(10), 1)
+        self.assertAlmostEqual(log10(100), 2)
+        with self.assertRaises(ValueError):
+            log10(0)
+        with self.assertRaises(ValueError):
+            log10(-1)
+
+    def test_factorial(self):
+        self.assertEqual(factorial(0), 1)
+        self.assertEqual(factorial(1), 1)
+        self.assertEqual(factorial(5), 120)
+        with self.assertRaises(ValueError):
+            factorial(-1)
+        with self.assertRaises(ValueError):
+            factorial(1.5)
+
+    def test_percentage(self):
+        self.assertEqual(percentage(10, 100), 10)
+        self.assertEqual(percentage(50, 200), 100)
+        self.assertEqual(percentage(25, 80), 20)
+        self.assertEqual(percentage(0, 100), 0)
 
 if __name__ == '__main__':
     unittest.main()

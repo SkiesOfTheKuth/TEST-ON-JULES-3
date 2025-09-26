@@ -3,21 +3,13 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# Environments
-.env
-.venv
+.Python
 env/
 venv/
-ENV/
-env.bak/
-venv.bak/
 
-# IDEs
-.idea/
+# IDE / Editor
 .vscode/
-*.swp
-*.swo
+.idea/
 
 # Other
 .DS_Store

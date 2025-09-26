@@ -10,29 +10,39 @@
     <div class="calculator">
         <div class="display" id="display">0</div>
         <div class="buttons">
-            <button class="btn operator" data-value="C">C</button>
-            <button class="btn operator" data-value="(">(</button>
-            <button class="btn operator" data-value=")">)</button>
-            <button class="btn operator" data-value="/">/</button>
+            <button class="btn function" data-value="sin(">sin</button>
+            <button class="btn function" data-value="cos(">cos</button>
+            <button class="btn function" data-value="tan(">tan</button>
+            <button class="btn clear" data-value="C">C</button>
 
+            <button class="btn function" data-value="log(">log</button>
+            <button class="btn function" data-value="log10(">log10</button>
+            <button class="btn" data-value="(">(</button>
+            <button class="btn" data-value=")">)</button>
+
+            <button class="btn function" data-value="sqrt(">√</button>
             <button class="btn" data-value="7">7</button>
             <button class="btn" data-value="8">8</button>
             <button class="btn" data-value="9">9</button>
-            <button class="btn operator" data-value="*">*</button>
+            <button class="btn operator" data-value="/">/</button>
 
+            <button class="btn function" data-value="power(">xʸ</button>
             <button class="btn" data-value="4">4</button>
             <button class="btn" data-value="5">5</button>
             <button class="btn" data-value="6">6</button>
-            <button class="btn operator" data-value="-">-</button>
+            <button class="btn operator" data-value="*">*</button>
 
+            <button class="btn function" data-value="factorial(">x!</button>
             <button class="btn" data-value="1">1</button>
             <button class="btn" data-value="2">2</button>
             <button class="btn" data-value="3">3</button>
-            <button class="btn operator" data-value="+">+</button>
+            <button class="btn operator" data-value="-">-</button>
 
-            <button class="btn zero" data-value="0">0</button>
+            <button class="btn function" data-value="percentage(">%</button>
+            <button class="btn" data-value="0">0</button>
             <button class="btn" data-value=".">.</button>
             <button class="btn equals" data-value="=">=</button>
+            <button class="btn operator" data-value="+">+</button>
         </div>
     </div>
     <script src="{{ url_for('static', filename='script.js') }}"></script>

@@ -7,7 +7,9 @@ document.addEventListener('DOMContentLoaded', () => {
     buttons.addEventListener('click', (e) => {
         if (!e.target.matches('.btn')) return;
 
-        const value = e.target.dataset.value;
+        const button = e.target;
+        const value = button.dataset.value;
+        const isOperator = button.classList.contains('operator');
 
         if (value === 'C') {
             currentExpression = '';
@@ -18,14 +20,14 @@ document.addEventListener('DOMContentLoaded', () => {
             calculate(currentExpression);
         } else {
             if (isResultDisplayed) {
-                // If a result is on display, start a new expression
-                // unless an operator is pressed.
-                if (['+', '-', '*', '/'].includes(value)) {
-                    // continue with the result
+                if (isOperator) {
+                    // Continue calculation with the result
+                    isResultDisplayed = false;
                 } else {
+                    // Start a new calculation
                     currentExpression = '';
+                    isResultDisplayed = false;
                 }
-                isResultDisplayed = false;
             }
             currentExpression += value;
             display.textContent = currentExpression;
@@ -45,16 +47,21 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
 
             if (response.ok) {
-                display.textContent = data.result;
-                currentExpression = String(data.result);
+                const result = data.result;
+                // Format result to avoid long decimals
+                const formattedResult = Number.isInteger(result) ? result : parseFloat(result.toFixed(10));
+                display.textContent = formattedResult;
+                currentExpression = String(formattedResult);
                 isResultDisplayed = true;
             } else {
                 display.textContent = 'Error';
                 currentExpression = '';
+                isResultDisplayed = false;
             }
         } catch (error) {
             display.textContent = 'Error';
             currentExpression = '';
+            isResultDisplayed = false;
         }
     }
 });

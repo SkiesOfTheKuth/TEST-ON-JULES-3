@@ -7,14 +7,21 @@ class CalculatorApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Calculator")
-        self.geometry("400x600")
-        self.resizable(False, False)
+        self.geometry("500x700")
+        self.resizable(True, True)
 
         self.asteval = asteval.Interpreter()
         # Add logic functions to the asteval interpreter
         self.asteval.symtable.update({
             'sqrt': logic.sqrt,
             'power': logic.power,
+            'sin': logic.sin,
+            'cos': logic.cos,
+            'tan': logic.tan,
+            'log': logic.log,
+            'log10': logic.log10,
+            'factorial': logic.factorial,
+            'percentage': logic.percentage,
         })
 
         self.expression = ""
@@ -22,47 +29,59 @@ class CalculatorApp(tk.Tk):
 
     def create_widgets(self):
         # --- Display Screen ---
-        display_font = font.Font(family='Helvetica', size=28, weight='bold')
+        display_font = font.Font(family='Helvetica', size=36, weight='bold')
         self.display_var = tk.StringVar()
         display = tk.Entry(self, textvariable=self.display_var, font=display_font, bd=10, insertwidth=2, width=14, borderwidth=4, relief="ridge", justify='right')
-        display.grid(row=0, column=0, columnspan=4, ipady=10, sticky="nsew")
+        display.grid(row=0, column=0, columnspan=5, ipady=20, sticky="nsew")
 
         # --- Button Frame ---
-        button_frame = tk.Frame(self)
-        button_frame.grid(row=1, column=0, columnspan=4, sticky="nsew")
+        button_frame = tk.Frame(self, bg="#f0f0f0")
+        button_frame.grid(row=1, column=0, columnspan=5, sticky="nsew")
 
-        button_font = font.Font(family='Helvetica', size=18)
+        button_font = font.Font(family='Helvetica', size=16)
 
         buttons = [
-            ('7', 1, 0), ('8', 1, 1), ('9', 1, 2), ('/', 1, 3),
-            ('4', 2, 0), ('5', 2, 1), ('6', 2, 2), ('*', 2, 3),
-            ('1', 3, 0), ('2', 3, 1), ('3', 3, 2), ('-', 3, 3),
-            ('0', 4, 0), ('.', 4, 1), ('+', 4, 2), ('=', 4, 3),
-            ('C', 5, 0), ('(', 5, 1), (')', 5, 2), ('**', 5, 3),
-            ('sqrt(', 6, 0, 2) # span 2 columns
+            ('sin', 1, 0, '#6c757d'), ('cos', 1, 1, '#6c757d'), ('tan', 1, 2, '#6c757d'), ('log', 1, 3, '#6c757d'), ('log10', 1, 4, '#6c757d'),
+            ('sqrt', 2, 0, '#6c757d'), ('x!', 2, 1, '#6c757d'), ('xʸ', 2, 2, '#6c757d'), ('%', 2, 3, '#6c757d'), ('C', 2, 4, '#dc3545'),
+            ('7', 3, 0), ('8', 3, 1), ('9', 3, 2), ('/', 3, 3, '#f59e0b'), ('*', 3, 4, '#f59e0b'),
+            ('4', 4, 0), ('5', 4, 1), ('6', 4, 2), ('-', 4, 3, '#f59e0b'), ('+', 4, 4, '#f59e0b'),
+            ('1', 5, 0), ('2', 5, 1), ('3', 5, 2), ('(', 5, 3), (')', 5, 4),
+            ('0', 6, 0, None, 2), ('.', 6, 2), ('=', 6, 3, '#28a745', 2)
         ]
 
-        for (text, row, col, *span) in buttons:
-            colspan = span[0] if span else 1
-            if text == '=':
-                btn = tk.Button(button_frame, text=text, font=button_font, command=self.calculate, height=2, width=5, bg="#c8e6c9")
-            elif text == 'C':
-                btn = tk.Button(button_frame, text=text, font=button_font, command=self.clear, height=2, width=5, bg="#ffcdd2")
-            else:
-                # Use a lambda to capture the current button text
-                btn = tk.Button(button_frame, text=text, font=button_font, command=lambda t=text: self.on_button_click(t), height=2, width=5)
+        for (text, row, col, *args) in buttons:
+            bg_color = args[0] if args and args[0] else "#e0e0e0"
+            colspan = args[1] if len(args) > 1 and args[1] else 1
 
-            btn.grid(row=row, column=col, columnspan=colspan, sticky="nsew", padx=1, pady=1)
+            action = self.on_button_click
+            if text == 'C':
+                action = self.clear
+            elif text == '=':
+                action = self.calculate
+
+            # Map button text to function calls
+            func_map = {
+                'sin': 'sin(', 'cos': 'cos(', 'tan': 'tan(', 'log': 'log(', 'log10': 'log10(',
+                'sqrt': 'sqrt(', 'x!': 'factorial(', 'xʸ': 'power(',' %': 'percentage('
+            }
+
+            button_val = func_map.get(text, text)
+
+            btn = tk.Button(button_frame, text=text, font=button_font, bg=bg_color, fg='white' if bg_color != '#e0e0e0' else 'black',
+                           command=lambda v=button_val, t=text: action(v) if t in ['C', '='] else self.on_button_click(v),
+                           height=2, relief='flat', overrelief='ridge')
+            btn.grid(row=row, column=col, columnspan=colspan, sticky="nsew", padx=2, pady=2)
+
 
         # Configure grid weights for proper scaling
         self.grid_rowconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=5)
-        for i in range(4):
+        for i in range(5):
             self.grid_columnconfigure(i, weight=1)
 
         for i in range(7):
             button_frame.grid_rowconfigure(i, weight=1)
-        for i in range(4):
+        for i in range(5):
             button_frame.grid_columnconfigure(i, weight=1)
 
     def on_button_click(self, char):
@@ -70,20 +89,22 @@ class CalculatorApp(tk.Tk):
         self.expression += str(char)
         self.display_var.set(self.expression)
 
-    def calculate(self):
+    def calculate(self, *args):
         """Evaluate the expression in the display."""
         try:
             result = self.asteval.eval(self.expression)
-            self.display_var.set(str(result))
-            self.expression = str(result)
+            # Format result to avoid long decimals
+            formatted_result = f"{result:.10f}".rstrip('0').rstrip('.')
+            self.display_var.set(formatted_result)
+            self.expression = str(formatted_result)
         except Exception as e:
             self.display_var.set("Error")
             self.expression = ""
 
-    def clear(self):
+    def clear(self, *args):
         """Clear the display and the expression."""
         self.expression = ""
-        self.display_var.set("")
+        self.display_var.set("0")
 
 if __name__ == "__main__":
     app = CalculatorApp()

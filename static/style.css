@@ -34,7 +34,7 @@ body {
 
 .buttons {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 10px;
 }
 
@@ -61,14 +61,27 @@ body {
     background-color: #f5b041;
 }
 
-.zero {
-    grid-column: span 2;
+.function {
+    background-color: #6c757d;
+    color: white;
+}
+
+.function:hover {
+    background-color: #5a6268;
+}
+
+.clear {
+    background-color: #dc3545;
+    color: white;
+}
+
+.clear:hover {
+    background-color: #c82333;
 }
 
 .equals {
     background-color: #28a745;
     color: white;
-    grid-column: span 2;
 }
 
 .equals:hover {
