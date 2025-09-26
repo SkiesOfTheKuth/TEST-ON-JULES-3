@@ -82,9 +82,8 @@ python3 gui_calculator.py
 
 ## How to Run Tests
 
-To run all the tests for the project, you can run each test file individually:
+To run all the tests for the project, use the `run_tests.py` script:
 ```bash
-python3 test_calculator.py
-python3 test_app.py
+python3 run_tests.py
 ```
-All tests should pass, confirming that the logic and application endpoints are working correctly.
+This will automatically discover and run all tests, confirming that the logic and application endpoints are working correctly.

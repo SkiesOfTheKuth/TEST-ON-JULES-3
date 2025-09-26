@@ -1,30 +1,12 @@
-import asteval
-import logic
+from engine import create_evaluator
 
 def main():
     """
     Main function to run the calculator.
-    Initializes an asteval interpreter and enters a loop to evaluate user input.
+    Initializes a centralized evaluator and enters a loop to evaluate user input.
     """
-    # Create a new asteval interpreter
-    a = asteval.Interpreter()
-
-    # Add the functions from our logic module to the interpreter's symbol table
-    a.symtable.update({
-        'add': logic.add,
-        'subtract': logic.subtract,
-        'multiply': logic.multiply,
-        'divide': logic.divide,
-        'power': logic.power,
-        'sqrt': logic.sqrt,
-        'sin': logic.sin,
-        'cos': logic.cos,
-        'tan': logic.tan,
-        'log': logic.log,
-        'log10': logic.log10,
-        'factorial': logic.factorial,
-        'percentage': logic.percentage,
-    })
+    # Create a centralized evaluator
+    evaluator = create_evaluator()
 
     print("Welcome to the advanced calculator!")
     print("You can use functions like: add, subtract, multiply, divide, power, sqrt, sin, cos, tan, log, log10, factorial, percentage")
@@ -38,12 +20,20 @@ def main():
             break
 
         try:
-            # Evaluate the expression using the asteval interpreter
-            result = a.eval(expression)
-            print(f"Result: {result}")
+            # Clear previous errors, as the interpreter is reused
+            evaluator.error = []
+            result = evaluator.eval(expression)
+
+            # Check if any errors occurred during evaluation
+            if evaluator.error:
+                # Get the first error and format it
+                error_message = evaluator.error[0].get_error()[1]
+                print(f"Error: {error_message}")
+            else:
+                print(f"Result: {result}")
 
         except Exception as e:
-            # Catch potential errors from asteval (e.g., syntax errors, undefined variables)
+            # Catch other unexpected errors
             print(f"Error: {e}")
 
 if __name__ == "__main__":

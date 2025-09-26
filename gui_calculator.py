@@ -1,7 +1,6 @@
 import tkinter as tk
 from tkinter import font
-import asteval
-import logic
+from engine import create_evaluator
 
 class CalculatorApp(tk.Tk):
     def __init__(self):
@@ -10,19 +9,7 @@ class CalculatorApp(tk.Tk):
         self.geometry("500x700")
         self.resizable(True, True)
 
-        self.asteval = asteval.Interpreter()
-        # Add logic functions to the asteval interpreter
-        self.asteval.symtable.update({
-            'sqrt': logic.sqrt,
-            'power': logic.power,
-            'sin': logic.sin,
-            'cos': logic.cos,
-            'tan': logic.tan,
-            'log': logic.log,
-            'log10': logic.log10,
-            'factorial': logic.factorial,
-            'percentage': logic.percentage,
-        })
+        self.evaluator = create_evaluator()
 
         self.expression = ""
         self.create_widgets()
@@ -92,11 +79,19 @@ class CalculatorApp(tk.Tk):
     def calculate(self, *args):
         """Evaluate the expression in the display."""
         try:
-            result = self.asteval.eval(self.expression)
-            # Format result to avoid long decimals
-            formatted_result = f"{result:.10f}".rstrip('0').rstrip('.')
-            self.display_var.set(formatted_result)
-            self.expression = str(formatted_result)
+            # Clear previous errors, as the interpreter is reused
+            self.evaluator.error = []
+            result = self.evaluator.eval(self.expression)
+
+            # Check if any errors occurred during evaluation
+            if self.evaluator.error:
+                self.display_var.set("Error")
+                self.expression = ""
+            else:
+                # Format result to avoid long decimals
+                formatted_result = f"{result:.10f}".rstrip('0').rstrip('.')
+                self.display_var.set(formatted_result)
+                self.expression = str(formatted_result)
         except Exception as e:
             self.display_var.set("Error")
             self.expression = ""

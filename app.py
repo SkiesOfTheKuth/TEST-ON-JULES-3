@@ -1,22 +1,10 @@
 from flask import Flask, render_template, request, jsonify
-import asteval
-import logic
+from engine import create_evaluator
 
 app = Flask(__name__)
 
-# Initialize the asteval interpreter
-asteval_interpreter = asteval.Interpreter()
-asteval_interpreter.symtable.update({
-    'sqrt': logic.sqrt,
-    'power': logic.power,
-    'sin': logic.sin,
-    'cos': logic.cos,
-    'tan': logic.tan,
-    'log': logic.log,
-    'log10': logic.log10,
-    'factorial': logic.factorial,
-    'percentage': logic.percentage,
-})
+# Create a centralized evaluator
+evaluator = create_evaluator()
 
 @app.route('/')
 def index():
@@ -32,13 +20,13 @@ def calculate():
 
     try:
         # Clear previous errors, as the interpreter is reused
-        asteval_interpreter.error = []
-        result = asteval_interpreter.eval(expression)
+        evaluator.error = []
+        result = evaluator.eval(expression)
 
         # Check if any errors occurred during evaluation
-        if asteval_interpreter.error:
+        if evaluator.error:
             # Get the first error and format it
-            error_message = asteval_interpreter.error[0].get_error()[1]
+            error_message = evaluator.error[0].get_error()[1]
             return jsonify({'error': error_message}), 400
 
         return jsonify({'result': result})
