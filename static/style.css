@@ -1,89 +1,67 @@
 body {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-    background-color: #f0f0f0;
-    margin: 0;
-    font-family: 'Arial', sans-serif;
+    background-color: #f8f9fa;
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+}
+
+.calculator-container, .history-container {
+    max-width: 500px;
+    margin: auto;
+}
+
+.history-container {
+    max-height: 80vh;
+    overflow-y: auto;
 }
 
 .calculator {
-    width: 320px;
-    border: 2px solid #ccc;
-    border-radius: 10px;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    background-color: #fff;
-    padding: 20px;
+    background-color: #ffffff;
+    border-radius: 15px;
 }
 
 .display {
-    width: 100%;
-    height: 70px;
-    background-color: #222;
-    color: #fff;
+    font-size: 2.5rem;
     text-align: right;
-    padding: 10px 20px;
-    font-size: 2.5em;
-    border-radius: 5px;
-    margin-bottom: 20px;
-    box-sizing: border-box;
-    overflow: hidden;
-    white-space: nowrap;
-}
-
-.buttons {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 10px;
-}
-
-.btn {
-    padding: 20px;
-    font-size: 1.5em;
+    background-color: #f1f3f5;
     border: none;
-    border-radius: 5px;
+    height: 80px;
+    margin-bottom: 1rem;
+}
+
+.buttons .btn {
+    font-size: 1.2rem;
+    padding: 1rem 0;
+}
+
+#history-list .list-group-item {
     cursor: pointer;
-    background-color: #e0e0e0;
     transition: background-color 0.2s;
+    word-wrap: break-word;
 }
 
-.btn:hover {
-    background-color: #d5d5d5;
+#history-list .list-group-item:hover {
+    background-color: #e9ecef;
 }
 
-.operator {
-    background-color: #f59e0b;
-    color: white;
+#history-list .list-group-item .expression {
+    font-size: 0.9rem;
+    color: #6c757d;
 }
 
-.operator:hover {
-    background-color: #f5b041;
+#history-list .list-group-item .result {
+    font-size: 1.1rem;
+    font-weight: bold;
 }
 
-.function {
-    background-color: #6c757d;
-    color: white;
-}
-
-.function:hover {
-    background-color: #5a6268;
-}
-
-.clear {
-    background-color: #dc3545;
-    color: white;
-}
-
-.clear:hover {
-    background-color: #c82333;
-}
-
-.equals {
-    background-color: #28a745;
-    color: white;
-}
-
-.equals:hover {
-    background-color: #218838;
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .container-fluid {
+        flex-direction: column;
+    }
+    .calculator-container {
+        margin-bottom: 2rem;
+    }
+    .history-container {
+        max-height: 40vh;
+    }
 }
