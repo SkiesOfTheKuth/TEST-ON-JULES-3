@@ -7,19 +7,27 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <div class="calculator-container">
-        <div class="display-container">
-            <input type="text" id="display" class="display" value="0" readonly>
-        </div>
-        <div class="buttons-grid">
-            <!-- Row 1: Functions -->
-            <button class="btn function" data-value="sind(">sin</button>
+    <div class="main-container">
+        <div class="calculator-container">
+            <div class="display-container">
+                <input type="text" id="display" class="display" value="0" readonly>
+            </div>
+            <div class="buttons-grid">
+                <!-- Row 1: Functions -->
+                <button class="btn function" data-value="sind(">sin</button>
             <button class="btn function" data-value="cosd(">cos</button>
             <button class="btn function" data-value="tand(">tan</button>
             <button class="btn function" data-value="log10(">log10</button>
             <button class="btn function" data-value="factorial(">n!</button>
 
-            <!-- Row 2: Inverse & Hyperbolic -->
+            <!-- Row 2: Memory -->
+            <button class="btn function" data-value="MC">MC</button>
+            <button class="btn function" data-value="M+">M+</button>
+            <button class="btn function" data-value="M-">M-</button>
+            <button class="btn function" data-value="MR">MR</button>
+            <button class="btn function" data-value="sqrt(">√</button>
+
+            <!-- Row 3: Inverse & Hyperbolic -->
             <button class="btn function" data-value="asin(">asin</button>
             <button class="btn function" data-value="acos(">acos</button>
             <button class="btn function" data-value="atan(">atan</button>
@@ -60,6 +68,15 @@
             <button class="btn operator" data-value="+">+</button>
         </div>
     </div>
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
+
+    <div class="history-container">
+        <h3 class="history-title">History</h3>
+        <div id="history-panel" class="history-panel">
+            <!-- History items will be injected here by JavaScript -->
+        </div>
+        <button id="clear-history-btn" class="btn clear-history">Clear History</button>
+    </div>
+</div>
+<script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>
