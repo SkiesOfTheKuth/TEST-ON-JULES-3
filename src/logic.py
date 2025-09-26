@@ -1,3 +1,5 @@
+import math
+
 def add(x, y):
     """This function adds two numbers"""
     return x + y
@@ -20,13 +22,11 @@ def power(x, y):
     """This function raises x to the power of y"""
     return x ** y
 
-import math
-
 def sqrt(x):
     """This function finds the square root of a number"""
     if x < 0:
         raise ValueError("Cannot take the square root of a negative number")
-    return x ** 0.5
+    return math.sqrt(x)
 
 def sin(x):
     """This function finds the sine of a number"""

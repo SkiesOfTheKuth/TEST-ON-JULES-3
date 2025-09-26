@@ -53,6 +53,7 @@ class TestCalculator(unittest.TestCase):
         self.assertEqual(sqrt(16), 4)
         self.assertEqual(sqrt(0), 0)
         self.assertAlmostEqual(sqrt(2), 1.41421356, places=7)
+        self.assertAlmostEqual(sqrt(0.1), math.sqrt(0.1))
         with self.assertRaises(ValueError):
             sqrt(-1)
 
