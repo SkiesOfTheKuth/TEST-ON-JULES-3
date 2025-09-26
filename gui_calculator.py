@@ -1,7 +1,6 @@
 import tkinter as tk
 from tkinter import font
-import asteval
-import logic
+from evaluator import create_evaluator
 
 class CalculatorApp(tk.Tk):
     def __init__(self):
@@ -10,12 +9,7 @@ class CalculatorApp(tk.Tk):
         self.geometry("400x600")
         self.resizable(False, False)
 
-        self.asteval = asteval.Interpreter()
-        # Add logic functions to the asteval interpreter
-        self.asteval.symtable.update({
-            'sqrt': logic.sqrt,
-            'power': logic.power,
-        })
+        self.asteval = create_evaluator()
 
         self.expression = ""
         self.create_widgets()

@@ -1,5 +1,4 @@
-import asteval
-import logic
+from evaluator import create_evaluator
 
 def main():
     """
@@ -7,15 +6,7 @@ def main():
     Initializes an asteval interpreter and enters a loop to evaluate user input.
     """
     # Create a new asteval interpreter
-    a = asteval.Interpreter()
-
-    # Add the functions from our logic module to the interpreter's symbol table
-    a.symtable['add'] = logic.add
-    a.symtable['subtract'] = logic.subtract
-    a.symtable['multiply'] = logic.multiply
-    a.symtable['divide'] = logic.divide
-    a.symtable['power'] = logic.power
-    a.symtable['sqrt'] = logic.sqrt
+    a = create_evaluator()
 
     print("Welcome to the advanced calculator!")
     print("You can use functions like: add, subtract, multiply, divide, power, sqrt")

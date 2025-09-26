@@ -1,23 +1,19 @@
-# Python
+# Log files
+flask.log
+
+# Python cache
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
 
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# IDEs
-.idea/
+# IDE and editor files
 .vscode/
-*.swp
-*.swo
+.idea/
 
-# Other
+# Virtual environment
+venv/
+env/
+.env
+
+# OS-specific files
 .DS_Store
+Thumbs.db

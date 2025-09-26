@@ -18,16 +18,25 @@ document.addEventListener('DOMContentLoaded', () => {
             calculate(currentExpression);
         } else {
             if (isResultDisplayed) {
-                // If a result is on display, start a new expression
-                // unless an operator is pressed.
-                if (['+', '-', '*', '/'].includes(value)) {
-                    // continue with the result
-                } else {
+                const operators = ['+', '-', '*', '/', '**'];
+                if (operators.includes(value)) {
+                    // If an operator is pressed, continue with the result
+                } else if (value === '(' && currentExpression.slice(-1) === ')') {
+                    // If the result is a function call, start a new expression
+                    currentExpression = '';
+                }
+                else {
+                    // Otherwise, start a new expression
                     currentExpression = '';
                 }
                 isResultDisplayed = false;
             }
-            currentExpression += value;
+
+            if (display.textContent === '0' && value !== '.') {
+                currentExpression = value;
+            } else {
+                currentExpression += value;
+            }
             display.textContent = currentExpression;
         }
     });
