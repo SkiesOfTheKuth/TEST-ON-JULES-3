@@ -81,6 +81,12 @@ class TestLogic(unittest.TestCase):
         """Test tangent function with degrees."""
         self.assertAlmostEqual(tand(0), 0)
         self.assertAlmostEqual(tand(45), 1)
+        with self.assertRaisesRegex(ValueError, r"Tangent is undefined for odd multiples of 90 degrees\."):
+            tand(90)
+        with self.assertRaisesRegex(ValueError, r"Tangent is undefined for odd multiples of 90 degrees\."):
+            tand(270)
+        with self.assertRaisesRegex(ValueError, r"Tangent is undefined for odd multiples of 90 degrees\."):
+            tand(-90)
 
     # --- Inverse Trigonometric Tests ---
     def test_asin(self):

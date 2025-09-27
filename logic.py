@@ -67,7 +67,14 @@ def cosd(x: Numeric) -> float:
     return math.cos(math.radians(x))
 
 def tand(x: Numeric) -> float:
-    """Calculates the tangent of a number in degrees."""
+    """
+    Calculates the tangent of a number in degrees.
+    Raises a ValueError for odd multiples of 90 degrees where tangent is undefined.
+    """
+    # Tangent is undefined for angles that are odd multiples of 90 degrees.
+    # This corresponds to cases where (x - 90) is a multiple of 180.
+    if (x - 90) % 180 == 0:
+        raise ValueError("Tangent is undefined for odd multiples of 90 degrees.")
     return math.tan(math.radians(x))
 
 # --- Inverse Trigonometric Functions (Result in Radians) ---
