@@ -38,6 +38,8 @@ def cos(x):
 
 def tan(x):
     """This function finds the tangent of a number"""
+    if (x - 90) % 180 == 0:
+        raise ValueError("Tangent is undefined for 90, 270, etc. degrees")
     return math.tan(math.radians(x))
 
 def log(x):
