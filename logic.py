@@ -1,27 +1,52 @@
-def add(x, y):
-    """This function adds two numbers"""
-    return x + y
+"""Core arithmetic helpers used by the calculator stack."""
 
-def subtract(x, y):
-    """This function subtracts two numbers"""
-    return x - y
+from __future__ import annotations
 
-def multiply(x, y):
-    """This function multiplies two numbers"""
-    return x * y
+import math
+from typing import SupportsFloat
 
-def divide(x, y):
-    """This function divides two numbers"""
-    if y == 0:
+
+Number = SupportsFloat
+
+
+def add(x: Number, y: Number) -> float:
+    """Add two numbers."""
+
+    return float(x) + float(y)
+
+
+def subtract(x: Number, y: Number) -> float:
+    """Subtract ``y`` from ``x``."""
+
+    return float(x) - float(y)
+
+
+def multiply(x: Number, y: Number) -> float:
+    """Multiply two numbers."""
+
+    return float(x) * float(y)
+
+
+def divide(x: Number, y: Number) -> float:
+    """Divide ``x`` by ``y`` ensuring ``y`` is non-zero."""
+
+    if float(y) == 0.0:
         raise ValueError("Cannot divide by zero")
-    return x / y
 
-def power(x, y):
-    """This function raises x to the power of y"""
-    return x ** y
+    return float(x) / float(y)
 
-def sqrt(x):
-    """This function finds the square root of a number"""
-    if x < 0:
+
+def power(x: Number, y: Number) -> float:
+    """Raise ``x`` to the power of ``y``."""
+
+    return float(x) ** float(y)
+
+
+def sqrt(x: Number) -> float:
+    """Return the non-negative square root of ``x``."""
+
+    value = float(x)
+    if value < 0:
         raise ValueError("Cannot take the square root of a negative number")
-    return x ** 0.5
+
+    return math.sqrt(value)
