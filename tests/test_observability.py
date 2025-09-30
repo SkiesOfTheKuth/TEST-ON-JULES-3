@@ -1,0 +1,27 @@
+"""Observability and health endpoint tests."""
+
+from __future__ import annotations
+
+AUTH_HEADERS = {"Authorization": "Bearer test-token"}
+
+
+def test_health_endpoints(client) -> None:
+    health = client.get("/healthz")
+    assert health.status_code == 200
+    assert health.get_json() == {"status": "ok"}
+
+    ready = client.get("/readyz")
+    assert ready.status_code == 200
+    assert ready.get_json() == {"status": "ready"}
+
+
+def test_metrics_endpoint(client) -> None:
+    client.post("/calculate", json={"expression": "1 + 2"}, headers=AUTH_HEADERS)
+
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert response.content_type == "text/plain; version=0.0.4; charset=utf-8"
+    body = response.data.decode()
+    assert "calculator_http_requests_total" in body
+    assert "calculator_http_request_duration_seconds" in body
+    assert "calculator_evaluations_total" in body

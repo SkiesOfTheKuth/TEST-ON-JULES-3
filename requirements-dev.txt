@@ -1,0 +1,5 @@
+black==24.8.0
+mypy==1.11.2
+pip-audit==2.7.3
+pytest==8.3.4
+ruff==0.6.5
