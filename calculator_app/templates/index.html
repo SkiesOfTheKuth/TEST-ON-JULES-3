@@ -7,9 +7,15 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <div class="calculator">
-        <div class="display" id="display">0</div>
-        <div class="buttons">
+    <header class="app-header">
+        <h1>Calculator</h1>
+        <p role="status" aria-live="polite" id="message" class="visually-hidden"></p>
+    </header>
+    <main class="calculator" role="application" aria-label="Calculator">
+        <output class="display" id="display" role="status" aria-live="polite">0</output>
+        <div class="buttons" role="group" aria-label="Calculator buttons">
+            <button class="btn function" data-value="sqrt(" aria-label="Square root">√</button>
+            <button class="btn function" data-value="power(" aria-label="Power function">pow</button>
             <button class="btn operator" data-value="C">C</button>
             <button class="btn operator" data-value="(">(</button>
             <button class="btn operator" data-value=")">)</button>
@@ -34,7 +40,7 @@
             <button class="btn" data-value=".">.</button>
             <button class="btn equals" data-value="=">=</button>
         </div>
-    </div>
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    </main>
+    <script src="{{ url_for('static', filename='script.js') }}" defer></script>
 </body>
 </html>

@@ -1,7 +1,10 @@
 import tkinter as tk
 from tkinter import font
-import asteval
-import logic
+from calculator_app.services.evaluator import (
+    ExpressionEvaluationError,
+    ExpressionValidationError,
+    SafeEvaluator,
+)
 
 class CalculatorApp(tk.Tk):
     def __init__(self):
@@ -10,12 +13,7 @@ class CalculatorApp(tk.Tk):
         self.geometry("400x600")
         self.resizable(False, False)
 
-        self.asteval = asteval.Interpreter()
-        # Add logic functions to the asteval interpreter
-        self.asteval.symtable.update({
-            'sqrt': logic.sqrt,
-            'power': logic.power,
-        })
+        self.evaluator = SafeEvaluator()
 
         self.expression = ""
         self.create_widgets()
@@ -38,8 +36,8 @@ class CalculatorApp(tk.Tk):
             ('4', 2, 0), ('5', 2, 1), ('6', 2, 2), ('*', 2, 3),
             ('1', 3, 0), ('2', 3, 1), ('3', 3, 2), ('-', 3, 3),
             ('0', 4, 0), ('.', 4, 1), ('+', 4, 2), ('=', 4, 3),
-            ('C', 5, 0), ('(', 5, 1), (')', 5, 2), ('**', 5, 3),
-            ('sqrt(', 6, 0, 2) # span 2 columns
+            ('C', 5, 0), ('(', 5, 1), (')', 5, 2), ('power(', 5, 3),
+            ('sqrt(', 6, 0, 2)  # span 2 columns
         ]
 
         for (text, row, col, *span) in buttons:
@@ -73,12 +71,22 @@ class CalculatorApp(tk.Tk):
     def calculate(self):
         """Evaluate the expression in the display."""
         try:
-            result = self.asteval.eval(self.expression)
-            self.display_var.set(str(result))
-            self.expression = str(result)
-        except Exception as e:
+            result = self.evaluator.evaluate(self.expression)
+        except ExpressionValidationError as exc:
+            self.display_var.set("Validation error")
+            self.expression = ""
+            return
+        except ExpressionEvaluationError:
+            self.display_var.set("Invalid expression")
+            self.expression = ""
+            return
+        except Exception:
             self.display_var.set("Error")
             self.expression = ""
+            return
+
+        self.display_var.set(str(result))
+        self.expression = str(result)
 
     def clear(self):
         """Clear the display and the expression."""
