@@ -1,23 +1,20 @@
-# Use an official Python runtime as a parent image
-FROM python:3.11-slim
+FROM python:3.11-slim AS base
 
-# Set the working directory in the container
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# Copy the requirements file into the container at /app
-COPY requirements.txt .
+RUN addgroup --system app && adduser --system --ingroup app app
 
-# Install any needed packages specified in requirements.txt
+COPY requirements.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application's code into the container at /app
 COPY . .
 
-# Make port 5000 available to the world outside this container
+RUN chown -R app:app /app
+USER app
+
 EXPOSE 5000
-
-# Define environment variables
 ENV FLASK_APP=app.py
-
-# Run app.py when the container launches
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]

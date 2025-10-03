@@ -1,33 +1,10 @@
-from flask import Flask, render_template, request, jsonify
-import asteval
-import logic
+"""WSGI entry point for the calculator service."""
 
-app = Flask(__name__)
+from __future__ import annotations
 
-# Initialize the asteval interpreter
-asteval_interpreter = asteval.Interpreter()
-asteval_interpreter.symtable.update({
-    'sqrt': logic.sqrt,
-    'power': logic.power,
-})
+from calculator_app import create_app
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+app = create_app()
 
-@app.route('/calculate', methods=['POST'])
-def calculate():
-    data = request.get_json()
-    expression = data.get('expression', '')
-
-    if not expression:
-        return jsonify({'error': 'Invalid expression'}), 400
-
-    try:
-        result = asteval_interpreter.eval(expression)
-        return jsonify({'result': result})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-if __name__ == '__main__':
-    app.run(debug=True)
+if __name__ == "__main__":  # pragma: no cover - script entry point
+    app.run(host="0.0.0.0", port=5000, debug=False)
