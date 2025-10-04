@@ -1,108 +1,75 @@
-CALCULATOR APPLICATION - FOOLPROOF SETUP AND USAGE GUIDE
-========================================================
+CALCULATOR PLATFORM – PHASE 1 USAGE GUIDE
+=============================================
 
 Overview
 --------
-This project is a secure calculator service. A Docker container runs a Flask web API and web UI, while optional CLI and desktop apps are available if you prefer Python directly.
+The calculator now runs as a hardened, multi-service platform:
+- `gateway` FastAPI service handling REST/WebSocket entry points, rate limiting, and auditing.
+- `safe-evaluator` sandboxed microservice running expressions via a subprocess guard.
+- Shared infrastructure: Redis for rate limiting/cache, Postgres for API keys and audit logs, and an observability stack (Prometheus, Tempo, Loki, Grafana).
 
-Prerequisites
--------------
-1. Windows 10/11 with PowerShell.
-2. Docker Desktop installed, running, and logged in.
-3. (Optional) Python 3.11+ if you want to use the CLI or Tkinter apps outside Docker.
+Quick Start with Docker Compose
+-------------------------------
+1. Install Docker Desktop (or Docker Engine) and ensure it is running.
+2. Copy `.env.development` to `.env` if you want to override defaults.
+3. From the repository root run:
+   ````bash
+   make compose-up
+   ````
+4. The following ports will be exposed by default:
+   - Gateway API: http://localhost:8080
+   - Grafana: http://localhost:3000 (admin / grafana)
+   - Postgres: localhost:5432 (calculator / calculator)
+5. Seed an API key by opening a shell in the gateway container and running the Alembic seeding script (see `OPERATIONS.md`).
+6. Send a request with the API key header:
+   ````bash
+   curl -H "X-Api-Key: <your-key>"         -H "Content-Type: application/json"         -d '{"expression": "add(1, 2)"}'         http://localhost:8080/calculate-sync
+   ````
+7. To stop the stack run:
+   ````bash
+   make compose-down
+   ````
 
-Quick Start (Docker)
---------------------
-Follow every step in order. Do not skip steps even if you ran them once before.
-
-1. Open PowerShell.
-2. Go to the project folder:
-   cd "C:\Users\Study\Downloads\Pull Projects\TEST-ON-JULES-3"
-3. Build the Docker image (re-run after any code change):
-   docker build -t calc-app:latest .
-4. Make sure the dedicated network exists (create it once):
-   docker network ls | findstr calc-net
-   If nothing prints, create it:
-   docker network create calc-net
-5. Start the container on its own network and dedicated port:
-   docker run --rm -d --name calc-api --network calc-net -p 5500:5000 calc-app:latest
-6. Confirm it is running:
-   docker ps --filter name=calc-api
-   You should see "Up" status.
-7. Use the calculator:
-   - Web browser: http://localhost:5500
-   - API (PowerShell example):
-     curl -Headers @{"Content-Type"="application/json"} -Method Post -Body '{"expression":"1 + 2"}' http://localhost:5500/calculate
-
-Stopping the Service
---------------------
-Run:
-   docker stop calc-api
-Because the container was started with --rm it disappears automatically after stopping.
-
-After a Reboot
---------------
-1. Start Docker Desktop first.
-2. Open PowerShell and cd into the project folder.
-3. Re-run step 5 from Quick Start to bring the container back. The image and calc-net network persist, so you do not need to rebuild unless you changed the code.
-
-Optional: Protect the API with an Access Key
---------------------------------------------
-Use an environment variable when starting the container:
-   docker run --rm -d --name calc-api --network calc-net -p 5500:5000 -e CALCULATOR_API_KEY=choose-a-secret calc-app:latest
-All requests must then include header: Authorization: Bearer choose-a-secret
-
-Optional: Change the Host Port
-------------------------------
-If port 5500 is busy, change the host-side number while keeping 5000 inside the container:
-   docker run --rm -d --name calc-api --network calc-net -p 8080:5000 calc-app:latest
-Use http://localhost:8080 in that case.
-
-Python Interfaces (Outside Docker)
+Local Development (without Docker)
 ----------------------------------
-Only do this if Python 3.11+ and pip are installed.
-1. Open PowerShell and run:
+1. Create a virtual environment and install dependencies:
+   ````bash
    python -m venv .venv
-   .\.venv\Scripts\activate
-   pip install -r requirements.txt
-2. CLI calculator:
-   python calculator.py
-3. Desktop GUI calculator:
-   python gui_calculator.py
-4. When done:
-   deactivate
+   source .venv/bin/activate
+   make bootstrap
+   ````
+2. Start Postgres and Redis locally (Docker compose is the easiest way).
+3. Apply database migrations:
+   ````bash
+   cd services/gateway
+   alembic upgrade head
+   ````
+4. Run the evaluator service:
+   ````bash
+   make run-evaluator
+   ````
+5. In another terminal run the gateway:
+   ````bash
+   make run-gateway
+   ````
 
-Running Tests
--------------
-Inside the activated virtual environment run:
-   pytest
-
-Cleanup
+Testing
 -------
-Stop the container:
-   docker stop calc-api
-Remove the network (only if you no longer need it):
-   docker network rm calc-net
-Remove the image (only if you want to free space):
-   docker rmi calc-app:latest
+Execute unit tests from the repository root:
+````bash
+make test
+````
 
-FAQ
----
-Q: Docker says the port is already allocated. What now?
-A: Pick another host port in the -p flag, for example -p 8080:5000, and use that port in your browser or API calls.
+API Security Highlights
+-----------------------
+- All requests require an `X-Api-Key` header referencing a hashed record in Postgres.
+- Redis-based sliding window throttles requests per key and per client IP.
+- Expressions are validated via AST inspection before hitting the sandbox.
+- Successful evaluations may be cached for deterministic expressions.
 
-Q: How do I see logs?
-A: Run docker logs -f calc-api while the container is running.
-
-Q: The API returns "Unauthorized". Why?
-A: You probably set CALCULATOR_API_KEY. Add header Authorization: Bearer your-key to each request or restart the container without the -e CALCULATOR_API_KEY option.
-
-Q: Do I need to rebuild after rebooting?
-A: No. Rebuild only after code changes or dependency updates. Just rerun the docker run command.
-
-Q: Can I run multiple copies?
-A: Yes, give each container a unique name, port, and (optionally) network, for example use -p 5501:5000 and --name calc-api-2.
-
-Q: How do I remove everything and start fresh?
-A: Stop the container, remove it if still present (docker rm -f calc-api), delete the calc-net network, remove the calc-app image, and optionally delete the project folder.
-
+Need More?
+----------
+- `docs/ARCHITECTURE.md` – component topology and call flows.
+- `docs/OPERATIONS.md` – running migrations, rotating keys, observability tips.
+- `docs/SECURITY.md` – threat model and controls.
+- ADRs in `docs/ADRS/` record key design decisions.

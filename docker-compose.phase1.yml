@@ -1,0 +1,90 @@
+version: "3.9"
+
+networks:
+  calc-platform-net:
+    driver: bridge
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    env_file: .env.development
+    ports:
+      - "8080:8080"
+    depends_on:
+      - safe-evaluator
+      - redis
+      - postgres
+    networks:
+      - calc-platform-net
+
+  safe-evaluator:
+    build:
+      context: .
+      dockerfile: services/safe_evaluator/Dockerfile
+    env_file: .env.development
+    networks:
+      - calc-platform-net
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - calc-platform-net
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: calculator
+      POSTGRES_PASSWORD: calculator
+      POSTGRES_DB: calculator
+    ports:
+      - "5432:5432"
+    networks:
+      - calc-platform-net
+
+  tempo:
+    image: grafana/tempo:2.5.0
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./observability/tempo.yaml:/etc/tempo.yaml:ro
+    networks:
+      - calc-platform-net
+
+  loki:
+    image: grafana/loki:3.2.1
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./observability/loki-config.yaml:/etc/loki/local-config.yaml:ro
+    networks:
+      - calc-platform-net
+
+  promtail:
+    image: grafana/promtail:3.2.1
+    command: ["-config.file=/etc/promtail/config.yaml"]
+    volumes:
+      - ./observability/promtail-config.yaml:/etc/promtail/config.yaml:ro
+    networks:
+      - calc-platform-net
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - calc-platform-net
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    networks:
+      - calc-platform-net

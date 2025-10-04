@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "calculator-safe-evaluator"
+version = "0.1.0"
+description = "Sandboxed evaluator microservice"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Calculator Platform Team"}]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+  "pydantic-settings>=2.4.0",
+  "opentelemetry-api>=1.25.0",
+  "opentelemetry-sdk>=1.25.0",
+  "opentelemetry-instrumentation-grpc>=0.46b0",
+  "python-json-logger>=2.0.7",
+  "asteval>=1.0.6",
+  {path = "../../libs/calculator_core", develop = true},
+  {path = "../../libs/calculator_logic", develop = true},
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.setuptools.packages.find]
+where = ["app"]
