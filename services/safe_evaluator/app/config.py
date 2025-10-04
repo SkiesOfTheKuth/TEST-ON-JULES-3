@@ -30,6 +30,10 @@ class EvaluatorSettings(BaseSettings):
     allowlist_path: Optional[Path] = Path(__file__).with_name("allowlist.json")
     otlp_endpoint: Optional[str] = None
     log_level: str = "INFO"
+    use_tls: bool = False
+    server_cert_path: Optional[Path] = None
+    server_key_path: Optional[Path] = None
+    client_ca_path: Optional[Path] = None
 
 
 @lru_cache(maxsize=1)
