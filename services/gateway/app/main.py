@@ -48,17 +48,20 @@ async def startup_event() -> None:
     app.state.settings = settings
     app.state.redis = Redis.from_url(settings.redis.url, decode_responses=True)
     app.state.cache = ResultCache(app.state.redis, settings.redis.cache_ttl_seconds)
+    rate_counter_ttl = settings.redis.rate_counter_ttl_seconds
     app.state.rate_limit_key = RateLimiter(
         app.state.redis,
         settings.redis.rate_limit_requests,
         settings.redis.rate_limit_window_seconds,
-        "rate:key",
+        "rate",
+        ttl_seconds=rate_counter_ttl,
     )
     app.state.rate_limit_ip = RateLimiter(
         app.state.redis,
         settings.redis.rate_limit_requests * 2,
         settings.redis.rate_limit_window_seconds,
-        "rate:ip",
+        "limiter",
+        ttl_seconds=rate_counter_ttl,
     )
     app.state.quota_config = QuotaConfig(
         limit=settings.quota.limit,

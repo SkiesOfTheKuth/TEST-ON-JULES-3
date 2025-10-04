@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
+from alembic import command
+from alembic.config import Config as AlembicConfig
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from .config import GatewaySettings, get_settings
-from .models import Base
 
 _engine: AsyncEngine | None = None
 _Session: async_sessionmaker[AsyncSession] | None = None
@@ -31,6 +34,16 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db(settings: GatewaySettings | None = None) -> None:
-    engine = await get_engine(settings)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    settings = settings or get_settings()
+    alembic_config = AlembicConfig(str(_alembic_ini_path()))
+    alembic_config.set_main_option("sqlalchemy.url", settings.database.url)
+    alembic_config.set_main_option("script_location", str(_alembic_script_path()))
+    await asyncio.to_thread(command.upgrade, alembic_config, "head")
+
+
+def _alembic_ini_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "alembic.ini"
+
+
+def _alembic_script_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "alembic"

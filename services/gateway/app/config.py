@@ -14,8 +14,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class RedisSettings(BaseModel):
     url: str = "redis://localhost:6379/0"
     cache_ttl_seconds: int = 300
-    rate_limit_window_seconds: int = 1
+    rate_limit_window_seconds: int = 60
     rate_limit_requests: int = 10
+    rate_counter_ttl_seconds: int = 60
 
 
 class DatabaseSettings(BaseModel):
