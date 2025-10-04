@@ -50,6 +50,7 @@ class RateLimiter:
             return True
         now_ms = int(time.time() * 1000)
         redis_key = f"{self._namespace}:{key}"
+        ttl_ms = max(int(self._ttl * 1000), 0)
         result = await self._redis.eval(
             self._LUA_SCRIPT,
             1,
@@ -57,6 +58,6 @@ class RateLimiter:
             now_ms,
             self._window * 1000,
             self._limit,
-            int(self._ttl * 1000),
+            ttl_ms,
         )
         return bool(result)

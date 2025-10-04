@@ -34,8 +34,8 @@ Redis keys follow the pattern:
 
 | Purpose | Key pattern | Default TTL |
 | --- | --- | --- |
-| API key rate limiting | `rate:{api_key_id}` | 60 seconds |
-| IP limiter | `limiter:{ip}` | 60 seconds |
-| Calculation result cache | `cache:{expression_hash}` | 5 minutes |
+| API key rate limiting | `{settings.redis.rate_namespace}:{api_key_id}` | 60 seconds |
+| IP limiter | `{settings.redis.limiter_namespace}:{ip}` | 60 seconds |
+| Calculation result cache | `{settings.redis.cache_namespace}:{expression_hash}` | 5 minutes |
 
-All TTL values are configurable through `GatewaySettings.redis` in `app/config.py`.
+Namespaces and TTL values are configurable through `GatewaySettings.redis` in `app/config.py`.
