@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+import time
 
 import grpc
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -19,9 +19,10 @@ from .config import get_settings
 from .database import get_session, init_db
 from .instrumentation import configure_tracing, instrument_app
 from .models import RequestAudit
+from .quota import QuotaConfig, QuotaExceededError, consume_quota
 from .rate_limit import RateLimiter
 from .schemas import CalculationResponse, ExpressionRequest
-from .security import get_api_key
+from .security import AuthenticatedAPIKey, get_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,10 @@ async def startup_event() -> None:
         settings.redis.rate_limit_window_seconds,
         "rate:ip",
     )
+    app.state.quota_config = QuotaConfig(
+        limit=settings.quota.limit,
+        window_seconds=settings.quota.window_seconds,
+    )
     await init_db(settings)
     app.state.grpc_channel = grpc.aio.insecure_channel(f"{settings.evaluator.host}:{settings.evaluator.port}")
     app.state.grpc_stub = evaluator_pb2_grpc.EvaluatorStub(app.state.grpc_channel)
@@ -64,7 +69,7 @@ async def shutdown_event() -> None:
 async def require_api_key(
     request: Request,
     session: AsyncSession = Depends(get_session),
-) -> Any:
+) -> AuthenticatedAPIKey:
     raw_key = request.headers.get("X-Api-Key")
     if not raw_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing API key")
@@ -78,21 +83,55 @@ async def require_api_key(
 async def calculate_sync(
     payload: ExpressionRequest,
     request: Request,
-    api_key=Depends(require_api_key),
+    api_key: AuthenticatedAPIKey = Depends(require_api_key),
+    session: AsyncSession = Depends(get_session),
 ) -> CalculationResponse:
     client_ip = request.client.host if request.client else "unknown"
+    api_key_id = api_key.record.id
     rate_limiter_key: RateLimiter = app.state.rate_limit_key
     rate_limiter_ip: RateLimiter = app.state.rate_limit_ip
-    if not await rate_limiter_key.allow(str(api_key.id)):
+    expression_hash = payload.hash(api_key.raw_key)
+
+    if not await rate_limiter_key.allow(str(api_key_id)):
+        await _persist_audit(
+            api_key_id,
+            expression_hash,
+            payload.expression,
+            client_ip,
+            "rate_limit_key",
+            0.0,
+        )
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="API key rate limit exceeded")
     if not await rate_limiter_ip.allow(client_ip):
+        await _persist_audit(
+            api_key_id,
+            expression_hash,
+            payload.expression,
+            client_ip,
+            "rate_limit_ip",
+            0.0,
+        )
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="IP rate limit exceeded")
 
+    try:
+        await consume_quota(session, api_key_id, app.state.quota_config)
+    except QuotaExceededError as exc:
+        await _persist_audit(
+            api_key_id,
+            expression_hash,
+            payload.expression,
+            client_ip,
+            "quota_exceeded",
+            0.0,
+        )
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+
     cache: ResultCache = app.state.cache
-    cache_key = payload.hash(str(api_key.id))
-    cached_value = await cache.get(cache_key) if settings.cache_pure_results else None
+    cache_key = expression_hash
+    should_use_cache = settings.cache_pure_results and payload.is_pure_arithmetic()
+    cached_value = await cache.get(cache_key) if should_use_cache else None
     if cached_value is not None:
-        await _persist_audit(api_key.id, cache_key, payload.expression, client_ip, "cache", 0.0)
+        await _persist_audit(api_key_id, cache_key, payload.expression, client_ip, "cache_hit", 0.0)
         return CalculationResponse(
             expression=payload.expression,
             value=cached_value,
@@ -101,47 +140,109 @@ async def calculate_sync(
         )
 
     stub: evaluator_pb2_grpc.EvaluatorStub = app.state.grpc_stub
-    request_message = evaluator_pb2.EvaluateRequest(expression=payload.expression, context={k: str(v) for k, v in payload.context.items()})
+    request_message = evaluator_pb2.EvaluateRequest(
+        expression=payload.expression,
+        context={k: str(v) for k, v in payload.context.items()},
+    )
 
+    start_time = time.perf_counter()
     try:
         response = await stub.Evaluate(
             request_message,
             timeout=settings.evaluator.deadline_ms / 1000,
         )
     except grpc.AioRpcError as exc:
-        logger.exception("Evaluator call failed")
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
         status_code = exc.code()
+        detail = exc.details() or "Evaluator unavailable"
         if status_code == grpc.StatusCode.INVALID_ARGUMENT:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.details())
+            await _persist_audit(
+                api_key_id,
+                expression_hash,
+                payload.expression,
+                client_ip,
+                "invalid_expression",
+                elapsed_ms,
+            )
+            return CalculationResponse(
+                expression=payload.expression,
+                error=detail,
+                duration_ms=elapsed_ms,
+                from_cache=False,
+            )
         if status_code == grpc.StatusCode.RESOURCE_EXHAUSTED:
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Evaluator busy")
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Evaluator unavailable")
+            await _persist_audit(
+                api_key_id,
+                expression_hash,
+                payload.expression,
+                client_ip,
+                "evaluator_rate_limited",
+                elapsed_ms,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Evaluator busy",
+            ) from exc
+        logger.exception("Evaluator call failed")
+        await _persist_audit(
+            api_key_id,
+            expression_hash,
+            payload.expression,
+            client_ip,
+            "evaluator_error",
+            elapsed_ms,
+        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Evaluator unavailable") from exc
+
+    duration_ms = response.duration_ms or (time.perf_counter() - start_time) * 1000
+    result_type = response.WhichOneof("result")
+
+    if result_type == "error":
+        await _persist_audit(
+            api_key_id,
+            expression_hash,
+            payload.expression,
+            client_ip,
+            "evaluation_error",
+            duration_ms,
+        )
+        return CalculationResponse(
+            expression=payload.expression,
+            error=response.error,
+            duration_ms=duration_ms,
+            from_cache=False,
+        )
+
+    if should_use_cache:
+        await cache.set(cache_key, response.value)
 
     asyncio.create_task(
         _persist_audit(
-            api_key.id,
+            api_key_id,
             cache_key,
             payload.expression,
             client_ip,
             "success",
-            response.duration_ms,
+            duration_ms,
         )
     )
-
-    if settings.cache_pure_results:
-        await cache.set(cache_key, response.value)
 
     return CalculationResponse(
         expression=payload.expression,
         value=response.value,
-        duration_ms=response.duration_ms,
+        duration_ms=duration_ms,
         from_cache=False,
     )
 
 
 @app.post("/calculate", response_model=CalculationResponse)
-async def calculate(payload: ExpressionRequest, request: Request, api_key=Depends(require_api_key)) -> CalculationResponse:
-    return await calculate_sync(payload, request, api_key)
+async def calculate(
+    payload: ExpressionRequest,
+    request: Request,
+    api_key: AuthenticatedAPIKey = Depends(require_api_key),
+    session: AsyncSession = Depends(get_session),
+) -> CalculationResponse:
+    return await calculate_sync(payload, request, api_key=api_key, session=session)
 
 
 @app.get("/health/live")
