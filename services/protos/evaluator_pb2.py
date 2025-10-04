@@ -46,6 +46,17 @@ class EvaluateResponse:
             duration_ms=float(payload.get("duration_ms", 0.0)),
         )
 
+    def WhichOneof(self, group: str) -> Optional[str]:
+        """Mirror the protobuf API for gateway compatibility."""
+
+        if group != "result":
+            return None
+        if self.value is not None:
+            return "value"
+        if self.error is not None:
+            return "error"
+        return None
+
     @property
     def result(self) -> str:
         if self.value is not None:

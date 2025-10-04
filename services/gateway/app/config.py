@@ -32,6 +32,10 @@ class EvaluatorSettings(BaseModel):
     host: str = "safe-evaluator"
     port: int = 50051
     deadline_ms: int = 250
+    use_tls: bool = False
+    root_cert_path: Optional[Path] = None
+    client_cert_path: Optional[Path] = None
+    client_key_path: Optional[Path] = None
 
 
 class ObservabilitySettings(BaseModel):
