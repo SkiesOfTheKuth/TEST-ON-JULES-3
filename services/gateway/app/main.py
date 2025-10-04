@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
+from typing import Optional
 
 import grpc
 from opentelemetry import trace
@@ -18,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from services.protos import evaluator_pb2, evaluator_pb2_grpc
 
 from .cache import ResultCache
-from .config import get_settings
+from .config import EvaluatorSettings, get_settings
 from .database import get_session, init_db
 from .instrumentation import (
     configure_logging,
@@ -72,7 +74,7 @@ async def startup_event() -> None:
         window_seconds=settings.quota.window_seconds,
     )
     await init_db(settings)
-    app.state.grpc_channel = grpc.aio.insecure_channel(f"{settings.evaluator.host}:{settings.evaluator.port}")
+    app.state.grpc_channel = _create_grpc_channel(settings.evaluator)
     app.state.grpc_stub = evaluator_pb2_grpc.EvaluatorStub(app.state.grpc_channel)
     logger.info("Gateway started on %s:%s", settings.host, settings.port)
 
@@ -315,6 +317,27 @@ async def _persist_audit(
         session.add(audit)
         await session.commit()
         break
+
+
+def _create_grpc_channel(evaluator: EvaluatorSettings) -> grpc.aio.Channel:
+    target = f"{evaluator.host}:{evaluator.port}"
+    if evaluator.use_tls:
+        credentials = grpc.ssl_channel_credentials(
+            root_certificates=_read_optional_bytes(evaluator.root_cert_path),
+            private_key=_read_optional_bytes(evaluator.client_key_path),
+            certificate_chain=_read_optional_bytes(evaluator.client_cert_path),
+        )
+        return grpc.aio.secure_channel(target, credentials)
+    return grpc.aio.insecure_channel(target)
+
+
+def _read_optional_bytes(path: Optional[Path]) -> Optional[bytes]:
+    if path is None:
+        return None
+    resolved = Path(path).expanduser()
+    if not resolved.exists():
+        raise RuntimeError(f"gRPC credential file not found: {resolved}")
+    return resolved.read_bytes()
 
 
 def _build_grpc_metadata(request: Request) -> list[tuple[str, str]]:
