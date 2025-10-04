@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from redis.asyncio import Redis
 
@@ -34,3 +34,38 @@ class ResultCache:
 
     def _format_key(self, key: str) -> str:
         return f"{self._namespace}:{key}"
+
+
+class JobCache:
+    """Cache for job metadata stored as JSON payloads."""
+
+    def __init__(self, redis: Redis, ttl_seconds: int, namespace: str = "jobs") -> None:
+        self._redis = redis
+        self._ttl = ttl_seconds
+        self._namespace = namespace
+
+    async def get(self, job_id: str) -> Optional[Dict[str, Any]]:
+        raw = await self._redis.get(self._format_key(job_id))
+        if raw is None:
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return payload
+
+    async def set(self, job_id: str, payload: Dict[str, Any]) -> None:
+        serialized = json.dumps(payload)
+        redis_key = self._format_key(job_id)
+        if self._ttl > 0:
+            await self._redis.set(redis_key, serialized, ex=self._ttl)
+        else:
+            await self._redis.set(redis_key, serialized)
+
+    async def delete(self, job_id: str) -> None:
+        await self._redis.delete(self._format_key(job_id))
+
+    def _format_key(self, job_id: str) -> str:
+        return f"{self._namespace}:{job_id}"
