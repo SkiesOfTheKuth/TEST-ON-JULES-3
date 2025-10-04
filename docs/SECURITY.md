@@ -25,6 +25,7 @@
 - [x] Observability stack receives structured JSON logs suitable for anomaly detection.
 - [ ] Enable TLS termination on gateway (requires reverse proxy or load balancer).
 - [ ] Configure mTLS between gateway and evaluator when production certificates are available (supported via `EVALUATOR_USE_TLS` and gateway evaluator TLS settings).
+
 - [x] Integrate Trivy, Bandit, Semgrep, and Syft into CI security scanning pipelines.
 - [ ] Add policy engine (OPA) for tenant-specific expression restrictions.
 
