@@ -1,0 +1,25 @@
+server:
+  http_listen_port: 3100
+
+positions:
+  filename: /tmp/positions.yaml
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: boltdb-shipper
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: loki_index_
+        period: 24h
+
+storage_config:
+  boltdb_shipper:
+    active_index_directory: /tmp/loki/index
+    shared_store: filesystem
+  filesystem:
+    directory: /tmp/loki/chunks
+
+limits_config:
+  retention_period: 168h

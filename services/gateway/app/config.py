@@ -1,0 +1,66 @@
+"""Configuration for the gateway service."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Optional
+
+from pydantic import BaseModel
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class RedisSettings(BaseModel):
+    url: str = "redis://localhost:6379/0"
+    cache_ttl_seconds: int = 300
+    rate_limit_window_seconds: int = 1
+    rate_limit_requests: int = 10
+
+
+class DatabaseSettings(BaseModel):
+    url: str = "postgresql+asyncpg://calculator:calculator@localhost:5432/calculator"
+    pool_size: int = 5
+    pool_timeout: int = 10
+
+
+class EvaluatorSettings(BaseModel):
+    host: str = "safe-evaluator"
+    port: int = 50051
+    deadline_ms: int = 250
+
+
+class ObservabilitySettings(BaseModel):
+    service_name: str = "calculator-gateway"
+    otlp_endpoint: Optional[str] = None
+    metrics_namespace: str = "calculator_gateway"
+
+
+class GatewaySettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="GATEWAY_", env_file=".env.development", env_file_encoding="utf-8")
+
+    host: str = "0.0.0.0"
+    port: int = 8080
+    log_level: str = "INFO"
+    redis: RedisSettings = RedisSettings()
+    database: DatabaseSettings = DatabaseSettings()
+    evaluator: EvaluatorSettings = EvaluatorSettings()
+    observability: ObservabilitySettings = ObservabilitySettings()
+    audit_batch_size: int = 100
+    cache_pure_results: bool = True
+    allowed_origins: list[str] = ["*"]
+
+    class Config:
+        env_nested_delimiter = "__"
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> GatewaySettings:
+    return GatewaySettings(_env_file=_resolve_env_file())
+
+
+def _resolve_env_file() -> Optional[Path]:
+    for candidate in (".env.development", ".env"):
+        path = Path(candidate)
+        if path.exists():
+            return path
+    return None

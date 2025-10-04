@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package evaluator.v1;
+
+service Evaluator {
+  rpc Evaluate (EvaluateRequest) returns (EvaluateResponse);
+}
+
+message EvaluateRequest {
+  string expression = 1;
+  map<string, string> context = 2;
+}
+
+message EvaluateResponse {
+  oneof result {
+    double value = 1;
+    string error = 2;
+  }
+  double duration_ms = 3;
+}
