@@ -90,6 +90,7 @@ Mutual TLS is optional—leave `EVALUATOR_CLIENT_CA_PATH` unset to accept TLS wi
 
 * **Evaluator:** Cover AST guards, timeout handling, error paths, and float precision edge cases.
 * **Gateway:** Exercise authentication middleware, rate-limit logic, cache behavior, and gRPC client stub interactions via mocks.
+* **Job orchestration:** Validate that `create_job` persists queued records and that Redis job cache entries are written with the expected metadata payload.
 
 ### Integration Tests
 
@@ -97,6 +98,15 @@ Mutual TLS is optional—leave `EVALUATOR_CLIENT_CA_PATH` unset to accept TLS wi
 * Exercise gateway HTTP endpoints to verify end-to-end HTTP ↔ gRPC requests and responses.
 * Validate rate-limiting by simulating bursts that exceed configured quotas.
 * Confirm the observability surface by asserting the metrics endpoint exposes the expected Prometheus series.
+* Run the Celery task suite with `task_always_eager = True` to verify lifecycle transitions (`queued → running → succeeded/failed`) and result caching updates.
+
+### Load Testing
+
+* The `tests/load/locustfile.py` script drives asynchronous job submissions and polling using Locust. Launch with:
+  ```bash
+  poetry run locust -f tests/load/locustfile.py --host=http://localhost:8080 --api-key=<key>
+  ```
+* Track throughput, queue depth, and worker latency in Grafana (`Gateway Overview` → `Async Jobs`). Export the Locust CSV/JSON stats into Prometheus via the pushgateway or scrape Locust's `/stats/requests/csv` endpoint for longer runs.
 
 ### Security Tests
 
@@ -112,7 +122,15 @@ Mutual TLS is optional—leave `EVALUATOR_CLIENT_CA_PATH` unset to accept TLS wi
 
 * **Evaluator crash:** Stop the evaluator container and confirm the gateway returns 503 responses and recovers once the container restarts.
 * **Redis outage:** Pause the Redis container; the gateway should continue serving requests without caching but still enforce quotas from Postgres.
-* **Load tests:** Use `k6` or similar to validate throughput targets. Focus on ensuring rate limits and cache hit ratios behave as expected.
+* **Load tests:** Use the provided Locust plan (`tests/load/locustfile.py`) or complementary tools such as `k6` to validate throughput targets. Focus on ensuring rate limits and cache hit ratios behave as expected.
+
+## Worker Scaling & Deployment
+
+1. **Horizontal scale-out:** Run multiple Celery worker replicas pinned to the `calculator-jobs` queue. Kubernetes `Deployment` or Docker Compose `scale` can be used; ensure each worker process sets `--hostname` to surface individual heartbeat metrics.
+2. **Priority lanes:** Enable tiered QoS by configuring Celery routing keys per priority level. The gateway maps the `priority` field into discrete buckets (`JobSettings.priority_levels`); provision dedicated queues (e.g., `calculator-jobs.high`, `calculator-jobs.normal`) and route via Celery's `task_routes` to guarantee latency for critical jobs.
+3. **Autoscaling guidance:** Monitor the `gateway.job.queue_depth` Prometheus metric and Celery worker heartbeats. Trigger scale-up when queue depth exceeds 75% of `JobSettings.max_queue_size` or worker CPU saturates >80% for five minutes. Scale-down once backlog clears and concurrency utilization drops below 40%.
+4. **Stateful persistence:** Postgres holds the job ledger (`jobs` table) while Redis caches in-flight/completed payloads with TTL. During deployments, drain workers gracefully (`celery -A app.task_queue control cancel_consumer`) before terminating pods to avoid losing locks on running jobs.
+5. **Disaster recovery:** Restore Postgres from point-in-time backups to recover job metadata; expired Redis entries are rehydrated from the database on demand. Document fallback procedures to manually requeue jobs via `enqueue_job` if necessary.
 
 ## Backup & Recovery
 
