@@ -21,6 +21,10 @@ class EvaluatorSettings(BaseSettings):
     max_runtime_seconds: float = 0.25
     max_result_magnitude: float = 1e12
     max_memory_bytes: int = 64 * 1024 * 1024
+    max_ast_depth: int = 25
+    max_ast_nodes: int = 128
+    max_complexity_score: int = 1024
+    allowlist_path: Optional[Path] = Path(__file__).with_name("allowlist.json")
     otlp_endpoint: Optional[str] = None
     log_level: str = "INFO"
 

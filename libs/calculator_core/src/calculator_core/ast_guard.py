@@ -17,23 +17,35 @@ class ExpressionValidator:
 
     allowed_nodes: Set[type]
     banned_names: Set[str]
+    max_length: int = 512
 
-    def validate(self, expression: str) -> ast.AST:
+    def validate(
+        self,
+        expression: str,
+        allowed_identifiers: Iterable[str] | None = None,
+    ) -> ast.AST:
         if not expression:
             raise ValidationError("Expression cannot be empty")
-        if len(expression) > 512:
-            raise ValidationError("Expression length exceeds maximum of 512 characters")
+        if len(expression) > self.max_length:
+            raise ValidationError(
+                f"Expression length exceeds maximum of {self.max_length} characters"
+            )
 
         try:
             tree = ast.parse(expression, mode="eval")
         except SyntaxError as exc:
             raise ValidationError(f"Invalid expression syntax: {exc.msg}") from exc
 
+        allowed_names = set(allowed_identifiers or ())
+
         for node in ast.walk(tree):
             if type(node) not in self.allowed_nodes:
                 raise ValidationError(f"Node {type(node).__name__} is not permitted")
-            if isinstance(node, ast.Name) and node.id in self.banned_names:
-                raise ValidationError(f"Name {node.id!r} is not permitted")
+            if isinstance(node, ast.Name):
+                if node.id in self.banned_names:
+                    raise ValidationError(f"Name {node.id!r} is not permitted")
+                if allowed_names and node.id not in allowed_names:
+                    raise ValidationError(f"Identifier {node.id!r} is not permitted")
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Attribute):
                     raise ValidationError("Attribute access is not permitted")

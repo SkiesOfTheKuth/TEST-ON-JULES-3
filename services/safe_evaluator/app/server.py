@@ -11,6 +11,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor
+from pythonjsonlogger import jsonlogger
 
 from .config import EvaluatorSettings, get_settings
 from .service import EvaluatorService
@@ -20,7 +21,14 @@ logger = logging.getLogger(__name__)
 
 
 def configure_logging(level: str) -> None:
-    logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO))
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    )
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(getattr(logging, level.upper(), logging.INFO))
 
 
 def configure_tracing(settings: EvaluatorSettings) -> None:
@@ -43,7 +51,7 @@ async def serve() -> None:
     evaluator = EvaluatorService(settings)
     evaluator_pb2_grpc.add_EvaluatorServicer_to_server(evaluator, server)
     server.add_insecure_port(f"{settings.host}:{settings.port}")
-    logger.info("Starting evaluator on %s:%s", settings.host, settings.port)
+    logger.info("Starting evaluator", extra={"host": settings.host, "port": settings.port})
     await server.start()
     await server.wait_for_termination()
 
