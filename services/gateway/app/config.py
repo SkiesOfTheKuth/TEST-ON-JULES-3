@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -36,7 +37,11 @@ class ObservabilitySettings(BaseModel):
 
 
 class GatewaySettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="GATEWAY_", env_file=".env.development", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_prefix="GATEWAY_",
+        env_nested_delimiter="__",
+        env_file_encoding="utf-8",
+    )
 
     host: str = "0.0.0.0"
     port: int = 8080
@@ -49,9 +54,6 @@ class GatewaySettings(BaseSettings):
     cache_pure_results: bool = True
     allowed_origins: list[str] = ["*"]
 
-    class Config:
-        env_nested_delimiter = "__"
-
 
 @lru_cache(maxsize=1)
 def get_settings() -> GatewaySettings:
@@ -59,7 +61,19 @@ def get_settings() -> GatewaySettings:
 
 
 def _resolve_env_file() -> Optional[Path]:
-    for candidate in (".env.development", ".env"):
+    explicit = os.getenv("GATEWAY_ENV_FILE")
+    if explicit:
+        path = Path(explicit)
+        if path.exists():
+            return path
+
+    env_name = os.getenv("GATEWAY_ENVIRONMENT") or os.getenv("ENVIRONMENT")
+    candidates: list[str] = []
+    if env_name:
+        candidates.append(f".env.{env_name.lower()}")
+    candidates.extend([".env.development", ".env"])
+
+    for candidate in candidates:
         path = Path(candidate)
         if path.exists():
             return path
