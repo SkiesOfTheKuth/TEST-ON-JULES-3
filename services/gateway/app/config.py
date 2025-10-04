@@ -49,6 +49,13 @@ class QuotaSettings(BaseModel):
     window_seconds: int = 60
 
 
+class JobSettings(BaseModel):
+    default_ttl_seconds: int = 3600
+    max_queue_size: int = 1000
+    max_concurrency: int = 10
+    priority_levels: int = 3
+
+
 class GatewaySettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="GATEWAY_",
@@ -64,6 +71,7 @@ class GatewaySettings(BaseSettings):
     evaluator: EvaluatorSettings = EvaluatorSettings()
     observability: ObservabilitySettings = ObservabilitySettings()
     quota: QuotaSettings = QuotaSettings()
+    job: JobSettings = JobSettings()
     audit_batch_size: int = 100
     cache_pure_results: bool = True
     allowed_origins: list[str] = ["*"]
