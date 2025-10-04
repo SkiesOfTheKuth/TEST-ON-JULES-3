@@ -58,6 +58,32 @@ The Compose environment now ships a full observability suite wired end-to-end:
 
 > Tip: `docker compose -f docker-compose.phase1.yml up --build` launches the entire stack. Grafana is reachable on `http://localhost:3000` (admin password `grafana`).
 
+## Securing Gateway ↔ Evaluator Traffic
+
+TLS between the gateway and evaluator is optional but fully supported. To enable:
+
+1. Provision certificates for the evaluator service:
+   * `server.crt` / `server.key` issued for the evaluator hostname (e.g., `safe-evaluator`).
+   * Optional client CA bundle (PEM) if you plan to enforce mutual TLS.
+2. Mount the certificate material into the evaluator container and set:
+   ```dotenv
+   EVALUATOR_USE_TLS=true
+   EVALUATOR_SERVER_CERT_PATH=/certs/server.crt
+   EVALUATOR_SERVER_KEY_PATH=/certs/server.key
+   # Optional – supply the CA bundle to require client certificates
+   EVALUATOR_CLIENT_CA_PATH=/certs/ca.pem
+   ```
+3. Configure the gateway client to trust the evaluator certificate and, for mTLS, present its own certificate:
+   ```dotenv
+   GATEWAY_EVALUATOR__USE_TLS=true
+   GATEWAY_EVALUATOR__ROOT_CERT_PATH=/certs/ca.pem
+   GATEWAY_EVALUATOR__CLIENT_CERT_PATH=/certs/gateway.crt
+   GATEWAY_EVALUATOR__CLIENT_KEY_PATH=/certs/gateway.key
+   ```
+4. Restart both services. The evaluator will refuse plaintext connections when TLS is enabled; ensure the gateway is updated simultaneously.
+
+Mutual TLS is optional—leave `EVALUATOR_CLIENT_CA_PATH` unset to accept TLS without client auth.
+
 ## Testing Strategy
 
 ### Unit Tests

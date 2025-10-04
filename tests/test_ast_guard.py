@@ -11,12 +11,24 @@ def test_validator_allows_simple_expression():
 
 def test_validator_blocks_attribute_access():
     validator = ExpressionValidator.default()
-    try:
+    with pytest.raises(ValidationError) as exc:
         validator.validate("__import__('os').system('ls')")
-    except ValidationError as exc:
-        assert "Attribute access" in str(exc)
-    else:
-        raise AssertionError("attribute access should be blocked")
+    assert "Attribute access" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "sum(x for x in range(5))",
+        "[__import__('os') for _ in range(2)]",
+        "(lambda: exec('1+1'))()",
+        "(__import__('os'), 42)[0]",
+    ],
+)
+def test_validator_rejects_malicious_payloads(payload: str) -> None:
+    validator = ExpressionValidator.default()
+    with pytest.raises(ValidationError):
+        validator.validate(payload)
 
 
 def test_validator_rejects_unknown_identifier():

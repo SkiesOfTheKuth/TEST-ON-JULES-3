@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: "poetry"
+    directory: "/services/gateway"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+  - package-ecosystem: "poetry"
+    directory: "/services/safe_evaluator"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+  - package-ecosystem: "poetry"
+    directory: "/libs/calculator_core"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+  - package-ecosystem: "poetry"
+    directory: "/libs/calculator_logic"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

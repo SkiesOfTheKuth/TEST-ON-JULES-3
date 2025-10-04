@@ -9,7 +9,7 @@
 | Credential compromise | API keys are stored hashed (SHA-256) in Postgres, transmitted via HTTPS (to be enabled in front of gateway), and rotated via Alembic seed scripts. |
 | Abuse/DoS | Redis sliding window rate limits per key and per IP; quotas table enables future tenant-level ceilings; cached deterministic results reduce evaluator load. |
 | Data tampering | Audit log entries persist hash of expression + key + outcome; Postgres provides transaction durability and can be replicated. |
-| Lateral movement between services | gRPC transport uses an internal network; future phases can enable mTLS by replacing `insecure_channel` with certificate-backed channels. |
+| Lateral movement between services | gRPC traffic stays on the internal bridge network and can be protected with TLS/mTLS by setting `EVALUATOR_USE_TLS=true` and providing certificate/key paths plus an optional client CA. |
 
 ## Secure Defaults
 
@@ -24,8 +24,8 @@
 - [x] Redis and Postgres run on isolated Docker network (`calc-platform-net`).
 - [x] Observability stack receives structured JSON logs suitable for anomaly detection.
 - [ ] Enable TLS termination on gateway (requires reverse proxy or load balancer).
-- [ ] Configure mTLS between gateway and evaluator when production certificates are available.
-- [ ] Integrate Trivy/Snyk into CI to scan Docker images.
+- [ ] Configure mTLS between gateway and evaluator when production certificates are available (supported via `EVALUATOR_USE_TLS` and gateway evaluator TLS settings).
+- [x] Integrate Trivy, Bandit, Semgrep, and Syft into CI security scanning pipelines.
 - [ ] Add policy engine (OPA) for tenant-specific expression restrictions.
 
 ## Incident Response Notes
