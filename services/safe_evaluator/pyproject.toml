@@ -28,3 +28,4 @@ calculator-logic = {path = "../../libs/calculator_logic", develop = true}
 pytest = "^8.0.0"
 pytest-asyncio = "^0.23.0"
 ruff = "^0.6.0"
+pytest-cov = "^5.0.0"
