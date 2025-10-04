@@ -1,8 +1,8 @@
-import asyncio
 import json
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 from celery.result import EagerResult
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -68,60 +68,54 @@ def test_settings(tmp_path: Path) -> GatewaySettings:
     )
 
 
-@pytest.fixture
-def engine(test_settings: GatewaySettings):
+@pytest_asyncio.fixture
+async def engine(test_settings: GatewaySettings):
     engine = create_async_engine(test_settings.database.url)
-
-    async def _prepare() -> None:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_prepare())
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     yield engine
-    asyncio.run(engine.dispose())
+    await engine.dispose()
 
 
-def test_create_job_persists_and_caches(engine, test_settings: GatewaySettings) -> None:
-    async def _run() -> None:
-        maker = async_sessionmaker(engine, expire_on_commit=False)
-        async with maker() as session:
-            submission = JobSubmissionRequest(
-                input_expression="1 + 2",
-                context={"x": 5},
-                priority=5,
-                tags=["Alpha", "alpha", "beta"],
-            )
+@pytest.mark.asyncio
+async def test_create_job_persists_and_caches(engine, test_settings: GatewaySettings) -> None:
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as session:
+        submission = JobSubmissionRequest(
+            input_expression="1 + 2",
+            context={"x": 5},
+            priority=5,
+            tags=["Alpha", "alpha", "beta"],
+        )
 
-            job = await jobs.create_job(session, submission, settings=test_settings)
-            assert job.status == jobs.STATUS_QUEUED
-            assert job.priority == 3
-            assert job.tags == ["Alpha", "beta"]
+        job = await jobs.create_job(session, submission, settings=test_settings)
+        assert job.status == jobs.STATUS_QUEUED
+        assert job.priority == 3
+        assert job.tags == ["Alpha", "beta"]
 
-            cached = _InMemoryJobCache()
-            await jobs.write_job_cache(cached, job, test_settings)
-            payload = cached.records[job.id]
+        cached = _InMemoryJobCache()
+        await jobs.write_job_cache(cached, job, test_settings)
+        payload = cached.records[job.id]
 
-            assert payload["status"] == jobs.STATUS_QUEUED
-            assert payload["links"]["ws"].endswith(job.id)
+        assert payload["status"] == jobs.STATUS_QUEUED
+        assert payload["links"]["ws"].endswith(job.id)
 
-            fetched = await jobs.fetch_job(session, job.id)
-            assert fetched is not None
-            assert fetched.input_expression == submission.input_expression
-
-    asyncio.run(_run())
+        fetched = await jobs.fetch_job(session, job.id)
+        assert fetched is not None
+        assert fetched.input_expression == submission.input_expression
 
 
-def test_celery_job_lifecycle_in_eager_mode(engine, test_settings: GatewaySettings, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _create_job():
-        maker = async_sessionmaker(engine, expire_on_commit=False)
-        async with maker() as session:
-            return await jobs.create_job(
-                session,
-                JobSubmissionRequest(input_expression="40 + 2", context={}, priority=0, tags=[]),
-                settings=test_settings,
-            )
-
-    job = asyncio.run(_create_job())
+@pytest.mark.asyncio
+async def test_celery_job_lifecycle_in_eager_mode(
+    engine, test_settings: GatewaySettings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as session:
+        job = await jobs.create_job(
+            session,
+            JobSubmissionRequest(input_expression="40 + 2", context={}, priority=0, tags=[]),
+            settings=test_settings,
+        )
 
     monkeypatch.setattr(task_queue, "settings", test_settings)
 
@@ -163,13 +157,11 @@ def test_celery_job_lifecycle_in_eager_mode(engine, test_settings: GatewaySettin
     assert statuses[0] == jobs.STATUS_RUNNING
     assert statuses[-1] == jobs.STATUS_SUCCEEDED
 
-    async def _fetch() -> dict:
-        maker = async_sessionmaker(engine, expire_on_commit=False)
-        async with maker() as session:
-            refreshed = await jobs.fetch_job(session, job.id)
-            assert refreshed is not None
-            return refreshed.result_payload
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as session:
+        refreshed = await jobs.fetch_job(session, job.id)
+        assert refreshed is not None
+        result_payload = refreshed.result_payload
 
-    result_payload = asyncio.run(_fetch())
     assert result_payload["value"] == 42.0
 
