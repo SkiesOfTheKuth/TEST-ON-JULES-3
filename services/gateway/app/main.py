@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-import grpc
+from services.common.grpc import grpc
 from opentelemetry import trace
 from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind, Status, StatusCode

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Final
 
 from redis.asyncio import Redis
@@ -24,7 +25,8 @@ class RateLimiter:
             return 0
         end
 
-        redis.call('ZADD', key, now, now)
+        local member = ARGV[5]
+        redis.call('ZADD', key, now, member)
         if ttl > 0 then
             redis.call('PEXPIRE', key, ttl)
         end
@@ -51,6 +53,7 @@ class RateLimiter:
         now_ms = int(time.time() * 1000)
         redis_key = f"{self._namespace}:{key}"
         ttl_ms = max(int(self._ttl * 1000), 0)
+        unique_member = f"{now_ms}:{uuid.uuid4().hex}"
         result = await self._redis.eval(
             self._LUA_SCRIPT,
             1,
@@ -59,5 +62,6 @@ class RateLimiter:
             self._window * 1000,
             self._limit,
             ttl_ms,
+            unique_member,
         )
         return bool(result)

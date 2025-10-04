@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-import grpc
+from services.common.grpc import grpc
 
 from . import evaluator_pb2 as evaluator__pb2
 

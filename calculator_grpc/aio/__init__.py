@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import ssl
+import tempfile
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional, Sequence, Tuple
 
@@ -12,6 +16,7 @@ from .. import (
     ChannelCredentials,
     GenericRpcHandler,
     MetadataItem,
+    ServerCredentials,
     ServicerContext,
     StatusCode,
     UnaryUnaryRpcMethodHandler,
@@ -68,7 +73,21 @@ class Channel:
             "data": request.to_dict(),
             "metadata": [(str(k), str(v)) for k, v in (metadata or ())],
         }
-        reader, writer = await asyncio.open_connection(self._host, self._port)
+        ssl_context_cm = (
+            _client_ssl_context(self._credentials)
+            if self._credentials
+            else nullcontext(None)
+        )
+        with ssl_context_cm as ssl_context:
+            connect_kwargs = {}
+            if ssl_context is not None:
+                connect_kwargs["ssl"] = ssl_context
+                connect_kwargs["server_hostname"] = self._host
+            reader, writer = await asyncio.open_connection(
+                self._host,
+                self._port,
+                **connect_kwargs,
+            )
         message = json.dumps(payload).encode("utf-8") + b"\n"
         writer.write(message)
         await writer.drain()
@@ -95,25 +114,50 @@ class Channel:
         return None
 
 
+@dataclass
+class _ServerTLSConfig:
+    ssl_context: ssl.SSLContext
+    temp_paths: list[str]
+
+
 class Server:
     def __init__(self) -> None:
         self._handlers: dict[str, dict[str, UnaryUnaryRpcMethodHandler]] = {}
         self._server: Optional[asyncio.AbstractServer] = None
         self._host = "127.0.0.1"
         self._port = 0
+        self._tls_config: Optional[_ServerTLSConfig] = None
 
     def add_generic_rpc_handlers(self, handlers: list[GenericRpcHandler]) -> None:
         for handler in handlers:
             self._handlers[handler.service_name] = handler.method_handlers
 
-    def add_insecure_port(self, target: str) -> str:
+    def add_insecure_port(self, target: str) -> int:
         host, port = target.split(":")
         self._host = host
         self._port = int(port)
-        return target
+        self._tls_config = None
+        return self._port
+
+    def add_secure_port(self, target: str, credentials: "ServerCredentials") -> int:
+        host, port = target.split(":")
+        self._host = host
+        self._port = int(port)
+        self._tls_config = _create_server_tls_config(credentials)
+        return self._port
 
     async def start(self) -> None:
-        self._server = await asyncio.start_server(self._handle_client, self._host, self._port)
+        ssl_context = self._tls_config.ssl_context if self._tls_config else None
+        self._server = await asyncio.start_server(
+            self._handle_client,
+            self._host,
+            self._port,
+            ssl=ssl_context,
+        )
+        if self._server.sockets:
+            sockname = self._server.sockets[0].getsockname()
+            if sockname and isinstance(sockname, tuple):
+                self._port = int(sockname[1])
 
     async def wait_for_termination(self) -> None:
         if self._server is None:
@@ -125,6 +169,17 @@ class Server:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
+        if self._tls_config:
+            _cleanup_temp_paths(self._tls_config.temp_paths)
+            self._tls_config = None
+
+    @property
+    def bound_port(self) -> int:
+        if self._server and self._server.sockets:
+            sockname = self._server.sockets[0].getsockname()
+            if sockname and isinstance(sockname, tuple):
+                return int(sockname[1])
+        return self._port
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         raw = await reader.readline()
@@ -187,6 +242,73 @@ def secure_channel(
 
 def server() -> Server:
     return Server()
+
+
+@contextmanager
+def _client_ssl_context(credentials: ChannelCredentials | None):
+    if credentials is None:
+        yield None
+        return
+    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+    if credentials.root_certificates:
+        context.load_verify_locations(
+            cadata=_ensure_text(credentials.root_certificates)
+        )
+    else:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    temp_paths: list[str] = []
+    try:
+        if credentials.certificate_chain and credentials.private_key:
+            cert_path = _write_temp_file(credentials.certificate_chain)
+            key_path = _write_temp_file(credentials.private_key)
+            temp_paths.extend([cert_path, key_path])
+            context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+        yield context
+    finally:
+        _cleanup_temp_paths(temp_paths)
+
+
+def _create_server_tls_config(credentials: "ServerCredentials") -> _ServerTLSConfig:
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    temp_paths: list[str] = []
+    key_path = _write_temp_file(credentials.private_key)
+    cert_path = _write_temp_file(credentials.certificate_chain)
+    temp_paths.extend([key_path, cert_path])
+    try:
+        context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+        if credentials.root_certificates:
+            context.load_verify_locations(
+                cadata=_ensure_text(credentials.root_certificates)
+            )
+        if credentials.require_client_auth:
+            context.verify_mode = ssl.CERT_REQUIRED
+    except Exception:
+        _cleanup_temp_paths(temp_paths)
+        raise
+    return _ServerTLSConfig(ssl_context=context, temp_paths=temp_paths)
+
+
+def _write_temp_file(data: bytes) -> str:
+    fd, path = tempfile.mkstemp()
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(data)
+    return path
+
+
+def _cleanup_temp_paths(paths: Sequence[str]) -> None:
+    for path in paths:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            continue
+
+
+def _ensure_text(data: bytes) -> str:
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("latin1")
 
 
 def _split_method(method: str) -> Tuple[str, str]:
