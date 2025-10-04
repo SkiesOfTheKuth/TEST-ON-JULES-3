@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Dict
+import uuid
+from typing import Dict, Iterable, List
 
 import grpc
+from opentelemetry import trace
+from opentelemetry.propagate import extract
+from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from calculator_core import (
     ComplexityBudget,
@@ -20,8 +24,18 @@ from services.protos import evaluator_pb2, evaluator_pb2_grpc
 
 from .allowlist import AllowListError, AllowListManager
 from .config import EvaluatorSettings
+from .observability import (
+    decrement_inflight,
+    increment_inflight,
+    record_evaluation,
+    record_sandbox_restart,
+    reset_request_id,
+    set_request_id,
+)
 
 logger = logging.getLogger(__name__)
+
+tracer = trace.get_tracer(__name__)
 
 
 class EvaluatorService(evaluator_pb2_grpc.EvaluatorServicer):
@@ -47,65 +61,142 @@ class EvaluatorService(evaluator_pb2_grpc.EvaluatorServicer):
         request: evaluator_pb2.EvaluateRequest,
         context: grpc.ServicerContext,
     ) -> evaluator_pb2.EvaluateResponse:
+        metadata_carrier = _metadata_to_carrier(context)
+        request_id = _resolve_request_id(metadata_carrier)
+        token = set_request_id(request_id)
+        parent_context = extract(_MetadataGetter(), metadata_carrier)
+        increment_inflight()
         start_time = time.perf_counter()
+        context.set_trailing_metadata((("x-request-id", request_id),))
+
         logger.debug(
             "Received evaluation request",
             extra={"expression": request.expression, "context_keys": list(request.context.keys())},
         )
 
         try:
-            snapshot = self._allowlist.snapshot()
-        except AllowListError as exc:
-            logger.error("Allow list load failed", exc_info=exc)
-            duration_ms = (time.perf_counter() - start_time) * 1000.0
-            return evaluator_pb2.EvaluateResponse(error=str(exc), duration_ms=duration_ms)
+            with tracer.start_as_current_span(
+                "Evaluator.Evaluate",
+                context=parent_context,
+                kind=SpanKind.SERVER,
+            ) as span:
+                span.set_attribute("rpc.system", "grpc")
+                span.set_attribute("rpc.service", "calculator.Evaluator")
+                span.set_attribute("rpc.method", "Evaluate")
+                span.set_attribute("request.id", request_id)
+                span.set_attribute("expression.length", len(request.expression))
+                span.set_attribute("context.entries", len(request.context))
+                peer = context.peer() or ""
+                if peer:
+                    span.set_attribute("net.peer.addr", peer)
 
-        try:
-            sanitized_context = _sanitize_context(request.context, snapshot.names)
-        except ValueError as exc:
-            duration_ms = (time.perf_counter() - start_time) * 1000.0
-            logger.info("Context validation failed", extra={"error": str(exc)})
-            return evaluator_pb2.EvaluateResponse(error=str(exc), duration_ms=duration_ms)
+                try:
+                    snapshot = self._allowlist.snapshot()
+                except AllowListError as exc:
+                    duration_ms = (time.perf_counter() - start_time) * 1000.0
+                    span.record_exception(exc)
+                    span.set_status(Status(StatusCode.ERROR, str(exc)))
+                    logger.error("Allow list load failed", exc_info=exc)
+                    record_evaluation(duration_ms / 1000.0, "allowlist_error")
+                    return evaluator_pb2.EvaluateResponse(error=str(exc), duration_ms=duration_ms)
 
-        allowed_identifiers = snapshot.names | set(sanitized_context.keys())
+                try:
+                    sanitized_context = _sanitize_context(request.context, snapshot.names)
+                except ValueError as exc:
+                    duration_ms = (time.perf_counter() - start_time) * 1000.0
+                    span.record_exception(exc)
+                    span.set_status(Status(StatusCode.ERROR, str(exc)))
+                    logger.info("Context validation failed", extra={"error": str(exc)})
+                    record_evaluation(duration_ms / 1000.0, "context_error")
+                    return evaluator_pb2.EvaluateResponse(error=str(exc), duration_ms=duration_ms)
 
-        try:
-            tree = self._validator.validate(
-                request.expression,
-                allowed_identifiers=allowed_identifiers,
-            )
-            metrics = self._budget.validate(tree)
-        except ValidationError as exc:
-            duration_ms = (time.perf_counter() - start_time) * 1000.0
-            logger.info("Expression validation failed", extra={"error": str(exc)})
-            return evaluator_pb2.EvaluateResponse(error=str(exc), duration_ms=duration_ms)
-        except ValueError as exc:
-            duration_ms = (time.perf_counter() - start_time) * 1000.0
-            logger.info("Complexity validation failed", extra={"error": str(exc)})
-            return evaluator_pb2.EvaluateResponse(error=str(exc), duration_ms=duration_ms)
+                allowed_identifiers = snapshot.names | set(sanitized_context.keys())
 
-        sandbox_result = self._sandbox.run(
-            request.expression,
-            sanitized_context,
-            snapshot.symbols,
-        )
+                try:
+                    tree = self._validator.validate(
+                        request.expression,
+                        allowed_identifiers=allowed_identifiers,
+                    )
+                    metrics = self._budget.validate(tree)
+                except ValidationError as exc:
+                    duration_ms = (time.perf_counter() - start_time) * 1000.0
+                    span.record_exception(exc)
+                    span.set_status(Status(StatusCode.ERROR, str(exc)))
+                    logger.info("Expression validation failed", extra={"error": str(exc)})
+                    record_evaluation(duration_ms / 1000.0, "validation_error")
+                    return evaluator_pb2.EvaluateResponse(error=str(exc), duration_ms=duration_ms)
+                except ValueError as exc:
+                    duration_ms = (time.perf_counter() - start_time) * 1000.0
+                    span.record_exception(exc)
+                    span.set_status(Status(StatusCode.ERROR, str(exc)))
+                    logger.info("Complexity validation failed", extra={"error": str(exc)})
+                    record_evaluation(duration_ms / 1000.0, "complexity_error")
+                    return evaluator_pb2.EvaluateResponse(error=str(exc), duration_ms=duration_ms)
 
-        if not sandbox_result.ok:
-            logger.info(
-                "Sandbox execution rejected",
-                extra={"error": sandbox_result.error, "duration_ms": sandbox_result.duration_ms},
-            )
-            return evaluator_pb2.EvaluateResponse(
-                error=sandbox_result.error or "Unknown error",
-                duration_ms=sandbox_result.duration_ms,
-            )
+                sandbox_result = self._sandbox.run(
+                    request.expression,
+                    sanitized_context,
+                    snapshot.symbols,
+                )
 
-        _log_success(metrics, sandbox_result.duration_ms)
+                span.set_attribute("sandbox.duration_ms", sandbox_result.duration_ms)
 
-        return evaluator_pb2.EvaluateResponse(
-            value=sandbox_result.value,
-            duration_ms=sandbox_result.duration_ms,
-        )
+                if not sandbox_result.ok:
+                    reason = sandbox_result.error or "unknown"
+                    logger.info(
+                        "Sandbox execution rejected",
+                        extra={"error": sandbox_result.error, "duration_ms": sandbox_result.duration_ms},
+                    )
+                    span.set_status(Status(StatusCode.ERROR, reason))
+                    if sandbox_result.error:
+                        span.record_exception(RuntimeError(sandbox_result.error))
+                    record_sandbox_restart(_normalize_reason(reason))
+                    record_evaluation(sandbox_result.duration_ms / 1000.0, "sandbox_failure")
+                    return evaluator_pb2.EvaluateResponse(
+                        error=sandbox_result.error or "Unknown error",
+                        duration_ms=sandbox_result.duration_ms,
+                    )
+
+                _log_success(metrics, sandbox_result.duration_ms)
+                span.set_attribute("calculator.ast.depth", metrics.depth)
+                span.set_attribute("calculator.ast.nodes", metrics.nodes)
+                span.set_attribute("calculator.ast.score", metrics.score)
+                span.set_status(Status(StatusCode.OK))
+                record_evaluation(sandbox_result.duration_ms / 1000.0, "success")
+
+                return evaluator_pb2.EvaluateResponse(
+                    value=sandbox_result.value,
+                    duration_ms=sandbox_result.duration_ms,
+                )
+        finally:
+            decrement_inflight()
+            reset_request_id(token)
+
+
+class _MetadataGetter:
+    def get(self, carrier: Dict[str, List[str]], key: str) -> Iterable[str]:  # noqa: D401
+        return carrier.get(key, [])
+
+
+def _metadata_to_carrier(context: grpc.ServicerContext) -> Dict[str, List[str]]:
+    carrier: Dict[str, List[str]] = {}
+    for item in context.invocation_metadata() or ():
+        carrier.setdefault(item.key, []).append(item.value)
+    return carrier
+
+
+def _resolve_request_id(carrier: Dict[str, List[str]]) -> str:
+    values = carrier.get("x-request-id")
+    if values:
+        return values[-1]
+    return uuid.uuid4().hex
+
+
+def _normalize_reason(reason: str) -> str:
+    sanitized = reason.strip().lower().replace(" ", "_")
+    if not sanitized:
+        return "unknown"
+    return sanitized[:64]
 
 
 def _sanitize_context(context: Dict[str, str], reserved: set[str]) -> Dict[str, float]:

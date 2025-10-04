@@ -18,6 +18,9 @@ class EvaluatorSettings(BaseSettings):
 
     host: str = "0.0.0.0"
     port: int = 50051
+    service_name: str = "calculator-safe-evaluator"
+    metrics_namespace: str = "calculator_safe_evaluator"
+    metrics_port: int = 9464
     max_runtime_seconds: float = 0.25
     max_result_magnitude: float = 1e12
     max_memory_bytes: int = 64 * 1024 * 1024

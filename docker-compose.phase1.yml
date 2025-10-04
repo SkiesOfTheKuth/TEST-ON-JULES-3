@@ -10,12 +10,17 @@ services:
       context: .
       dockerfile: services/gateway/Dockerfile
     env_file: .env.development
+    environment:
+      GATEWAY_OBSERVABILITY__OTLP_ENDPOINT: http://tempo:4318/v1/traces
+      GATEWAY_OBSERVABILITY__SERVICE_NAME: calculator-gateway
+      GATEWAY_OBSERVABILITY__METRICS_NAMESPACE: calculator_gateway
     ports:
       - "8080:8080"
     depends_on:
       - safe-evaluator
       - redis
       - postgres
+      - tempo
     networks:
       - calc-platform-net
 
@@ -24,6 +29,13 @@ services:
       context: .
       dockerfile: services/safe_evaluator/Dockerfile
     env_file: .env.development
+    environment:
+      EVALUATOR_OTLP_ENDPOINT: http://tempo:4318/v1/traces
+      EVALUATOR_SERVICE_NAME: calculator-safe-evaluator
+      EVALUATOR_METRICS_PORT: 9464
+      EVALUATOR_METRICS_NAMESPACE: calculator_safe_evaluator
+    expose:
+      - "9464"
     networks:
       - calc-platform-net
 
@@ -64,6 +76,8 @@ services:
     command: ["-config.file=/etc/promtail/config.yaml"]
     volumes:
       - ./observability/promtail-config.yaml:/etc/promtail/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
     networks:
       - calc-platform-net
 
@@ -80,6 +94,9 @@ services:
     image: grafana/grafana:11.1.0
     environment:
       GF_SECURITY_ADMIN_PASSWORD: grafana
+      SLACK_WEBHOOK_URL: https://hooks.slack.com/services/replace/me
+      ALERT_EMAIL_RECIPIENTS: ops@example.com
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
     ports:
       - "3000:3000"
     depends_on:
@@ -88,3 +105,6 @@ services:
       - loki
     networks:
       - calc-platform-net
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
