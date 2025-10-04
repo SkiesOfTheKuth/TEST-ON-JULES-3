@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -62,3 +63,26 @@ class Quota(Base):
     window_end: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     usage: Mapped[int] = mapped_column(Integer, default=0)
     limit: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (
+        Index("ix_jobs_status", "status"),
+        Index("ix_jobs_created_at", "created_at"),
+        Index("ix_jobs_priority", "priority"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=dt.datetime.utcnow, nullable=False
+    )
+    started_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    input_expression: Mapped[str] = mapped_column(String(512), nullable=False)
+    context: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    result_payload: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tags: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)

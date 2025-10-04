@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import re
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 PURE_ARITHMETIC_RE = re.compile(r"^[0-9+\-*/().\s]+$")
@@ -36,3 +37,27 @@ class CalculationResponse(BaseModel):
     error: Optional[str] = None
     duration_ms: float
     from_cache: bool = False
+
+
+class JobSubmissionRequest(BaseModel):
+    input_expression: str = Field(..., min_length=1, max_length=512)
+    context: Dict[str, float] = Field(default_factory=dict)
+    priority: int = Field(0, ge=0)
+    tags: list[str] = Field(default_factory=list)
+
+
+class JobStatusResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    status: str
+    created_at: dt.datetime
+    started_at: Optional[dt.datetime] = None
+    completed_at: Optional[dt.datetime] = None
+    priority: int
+    tags: list[str] = Field(default_factory=list)
+
+
+class JobResultResponse(JobStatusResponse):
+    result_payload: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
