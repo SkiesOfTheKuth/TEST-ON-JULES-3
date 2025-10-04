@@ -66,12 +66,38 @@ class ChannelCredentials:
     certificate_chain: Optional[bytes] = None
 
 
+@dataclass(slots=True)
+class ServerCredentials:
+    private_key: bytes
+    certificate_chain: bytes
+    root_certificates: Optional[bytes] = None
+    require_client_auth: bool = False
+
+
 def ssl_channel_credentials(
     root_certificates: Optional[bytes] = None,
     private_key: Optional[bytes] = None,
     certificate_chain: Optional[bytes] = None,
 ) -> ChannelCredentials:
     return ChannelCredentials(root_certificates, private_key, certificate_chain)
+
+
+def ssl_server_credentials(
+    private_key_certificate_chain_pairs: Sequence[Tuple[bytes, bytes]],
+    *,
+    root_certificates: Optional[bytes] = None,
+    require_client_auth: bool = False,
+) -> ServerCredentials:
+    if not private_key_certificate_chain_pairs:
+        raise ValueError("At least one certificate pair is required")
+    # We only support a single key/cert pair in the shim.
+    private_key, certificate_chain = private_key_certificate_chain_pairs[0]
+    return ServerCredentials(
+        private_key=private_key,
+        certificate_chain=certificate_chain,
+        root_certificates=root_certificates,
+        require_client_auth=require_client_auth,
+    )
 
 
 class UnaryUnaryRpcMethodHandler:
@@ -126,6 +152,7 @@ from . import aio  # noqa: E402
 __all__ = [
     "AioRpcError",
     "ChannelCredentials",
+    "ServerCredentials",
     "GenericRpcHandler",
     "MetadataItem",
     "RpcError",
@@ -135,4 +162,5 @@ __all__ = [
     "aio",
     "method_handlers_generic_handler",
     "ssl_channel_credentials",
+    "ssl_server_credentials",
 ]

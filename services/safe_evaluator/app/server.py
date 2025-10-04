@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-import grpc
+from services.common.grpc import grpc
 
 from .config import get_settings
 from .observability import configure_logging, configure_metrics, configure_tracing

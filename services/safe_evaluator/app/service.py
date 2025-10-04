@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Dict, Iterable, List
 
-import grpc
+from services.common.grpc import grpc
 from opentelemetry import trace
 from opentelemetry.propagate import extract
 from opentelemetry.trace import SpanKind, Status, StatusCode
