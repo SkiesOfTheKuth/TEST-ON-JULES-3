@@ -1,0 +1,13 @@
+rules:
+  - id: python-no-eval-exec
+    message: "Use of eval/exec is prohibited in hardened calculator services."
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+  - id: python-no-subprocess-shell
+    message: "Avoid shell=True when invoking subprocesses."
+    severity: WARNING
+    languages: [python]
+    pattern: subprocess.$FUNC(..., shell=True, ...)
