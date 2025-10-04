@@ -58,6 +58,30 @@ The Compose environment now ships a full observability suite wired end-to-end:
 
 > Tip: `docker compose -f docker-compose.phase1.yml up --build` launches the entire stack. Grafana is reachable on `http://localhost:3000` (admin password `grafana`).
 
+## Testing Strategy
+
+### Unit Tests
+
+* **Evaluator:** Cover AST guards, timeout handling, error paths, and float precision edge cases.
+* **Gateway:** Exercise authentication middleware, rate-limit logic, cache behavior, and gRPC client stub interactions via mocks.
+
+### Integration Tests
+
+* Launch the evaluator service via a pytest fixture that manages the subprocess lifecycle.
+* Exercise gateway HTTP endpoints to verify end-to-end HTTP ↔ gRPC requests and responses.
+* Validate rate-limiting by simulating bursts that exceed configured quotas.
+* Confirm the observability surface by asserting the metrics endpoint exposes the expected Prometheus series.
+
+### Security Tests
+
+* Fuzz expression inputs with payloads (e.g., `__import__`, infinite loops) to ensure the evaluator rejects unsafe constructs.
+* Incorporate static analysis (Bandit, Semgrep) into the CI pipeline.
+
+### Chaos Testing (Mini)
+
+* Terminate the evaluator mid-request and verify the gateway responds with HTTP 503 and retry guidance.
+* Simulate a Redis outage to ensure the gateway degrades gracefully—disabling caching while continuing to serve requests.
+
 ## Resiliency Drills
 
 * **Evaluator crash:** Stop the evaluator container and confirm the gateway returns 503 responses and recovers once the container restarts.
