@@ -1,0 +1,76 @@
+# Calculator Platform Roadmap
+
+## North Star
+
+- Deliver a multi-tenant, zero-trust calculator platform that spans interactive UI, API, job queue, symbolic engine, collaborative workspaces, and AI insights.
+- Target scale: thousands of concurrent users, heavy numerical/symbolic workloads, auditable traceability, and production-grade DevSecOps.
+
+## Baseline Alignment (Weeks 0-1)
+
+- **Branch Merge:** land `feature/massive-improvements-3` UX/functionality onto calculator safeguards. Hand-migrate `safe_evaluator`, rate limiting, auth, metrics, and tests into the `src/` layout; resolve conflicts carefully (e.g., adapter layer wrapping `Calculator` class with guardrails).
+- **Repo Hygiene:** remove `strace.log`; enforce `.gitattributes`/`.gitignore` for logs; align black/isort/ruff config; rehydrate pytest suites (CLI/GUI/API/observability).
+- **Containers & Make Targets:** rebuild `Dockerfile` around `src/`, add multi-stage build, local env templates, and Make targets (`make lint`, `make test`, `make run`).
+- **CI/CD Baseline:** GitHub Actions running lint + tests + docker build; push artifacts to GHCR with semantic version tags; require checks for PR merge.
+
+## Phase 1 – Hardened Core Services (Weeks 2-4)
+
+- **Service Split 1:** convert Flask app into API Gateway (FastAPI for async) exposing `/calculate` (sync) and `/jobs` (async).
+- **Safe Evaluator Module:** containerized microservice using PyPy sandbox + fine-grained whitelist, resource-limited via multiprocessing + seccomp; gRPC interface `Evaluate(Expression, Context) -> Result|Error`.
+- **Rate & Auth:** enforce JWT or API-key with HMAC rotation; integrate Flask-Limiter backed by Redis; add per-user quotas and audit logs (Postgres).
+- **Observability:** OpenTelemetry instrumentation across gateway + evaluator; traces to Tempo, metrics to Prometheus, logs to Loki; dashboards in Grafana with SLOs (latency, error rate, saturation).
+- **Testing:** contract tests between gateway and evaluator, chaos tests (kill sandbox mid-execution), fuzz tests for expression inputs, load test using k6.
+
+## Phase 2 – Distributed Compute Backbone (Weeks 5-8)
+
+- **Job Orchestrator:** introduce Celery (Redis broker + result backend) or Ray; define Job schema (UUID, status, payload, retries, metadata).
+- **API Additions:** `/jobs` POST for async submission, `/jobs/{id}` GET for status/result, WebSocket for push updates.
+- **Task Types:** arithmetic (existing), “heavy math” (Monte Carlo, big matrix), delegated to worker pools (CPU vs GPU labels).
+- **Caching Layer:** add Redis + optional Postgres cache for deterministic expressions; implement TTL and invalidation.
+- **Autoscaling:** configure Horizontal Pod Autoscaler (if K8s) or docker-compose scale; include worker heartbeat, Prometheus metrics for queue length.
+- **Governance:** define policy engine (OPA or custom) to enforce per-tenant limits, banned operations, runtime ceilings.
+- **Testing:** resilience scenarios (retry storm, slow worker), soak testing 24h; integration tests verifying job metadata & persistence.
+
+## Phase 3 – Symbolic & Codegen Engine (Weeks 9-12)
+
+- **SymbolicEngine Microservice:** FastAPI + SymPy + Numba/LLVM; endpoints for simplify, derivative, integral, solve, series, codegen.
+- **Sandboxing:** run expressions in restricted subprocess with seccomp + time/memory limits; support curated modules (SymPy, math, numpy).
+- **Result Types:** JSON payload containing symbolic form, LaTeX, numeric approximations, generated code (C, Python).
+- **Pipeline:** Gateway routes requests with `mode=symbolic` to SymbolicEngine via gRPC; fallback to SafeEvaluator for simple expressions.
+- **Caching & Verification:** store canonical forms in Postgres with hash keyed by AST; run quick numeric spot-checks to verify equivalence.
+- **Testing:** property tests comparing symbolic vs numerical results, regression suite for known identities, performance benchmarks.
+
+## Phase 4 – Collaborative Workspace (Weeks 13-16)
+
+- **Front-end Rewrite:** Next.js + TypeScript; integrate Chakra/Material UI; use y-websocket + Yjs for CRDT-powered shared documents.
+- **Session Model:** Postgres schema for workspaces (id, owner, participants, ACL), timeline snapshots, comments, tags.
+- **Real-time Infra:** WebSocket gateway (FastAPI + uvicorn) bridging Yjs docs, pushing job status updates; presence indicators, role-based permissions.
+- **History & Replay:** snapshot after each commit, allow branching, diff view with highlighted expression changes and results.
+- **Auth & RBAC:** integrate gateway JWT with front-end; support invite links, viewer/editor/admin roles; tie into policy engine.
+- **Testing:** Cypress/Playwright end-to-end; load test Yjs sync; simulate conflict resolution; security tests for permission escalation.
+
+## Phase 5 – Insight Agent & Knowledge Layer (Weeks 17-20)
+
+- **Data Lake:** stream all completed jobs + explanations into Kafka; sink to ClickHouse for analytics.
+- **RAG Service:** build context index (FAISS or pgvector) across past sessions, definitions, docs; create prompt builder microservice.
+- **LLM Integration:** host open-source model (Llama 3 or Mistral) via LM Studio on isolated GPU node; use guardrails (prompt injection filter, output moderation).
+- **Features:** natural-language step-by-step explanations, unit conversions, “what-if” scenarios, recommended next ops; voice support via Whisper/Silero for STT and Coqui or similar for TTS.
+- **Feedback Loop:** collect thumbs-up/down, store in analytics for fine-tuning; implement context redaction for secrets.
+- **Testing:** red-team prompts, hallucination detection, latency budget (<2s for short responses), fallback to deterministic explanations when LLM unavailable.
+
+## Phase 6 – Compliance & Deployment (Weeks 21-24)
+
+- **Infrastructure:** Helm charts for all services (gateway, evaluator, symbolic, workers, websocket, insight, databases, observability stack); optional Terraform for cloud (AKS/EKS).
+- **Security:** integrate Snyk/Trivy scans, dependency review, SBOM generation; add network policies, mTLS between services, secrets via Vault.
+- **Compliance:** audit logging (Kafka → S3), GDPR-ready data retention policies, per-tenant encryption at rest, optional customer-managed keys.
+- **SLAs & Runbooks:** incident response playbooks, on-call rotation checklist, runbooks for scaling, failover, upgrades.
+- **Self-Service:** Admin portal for tenants to view usage, quotas, audit logs; API for provisioning API keys/secrets.
+- **Testing:** DR drills (simulate region outage), CIS benchmarks, load tests under SLA thresholds, release readiness checklist.
+- **Release:** staged rollout (dev → staging → prod) with canary, feature flags, automated rollbacks.
+
+## Implementation Notes
+
+- **Branch Strategy:** create `epics/*` branches per phase; keep `develop` for integration; PRs gated on CI and code owners (security, ops).
+- **Documentation:** maintain `ARCHITECTURE.md`, ADRs per major decision, API spec via OpenAPI, gRPC proto docs; update user guide with new flows.
+- **Team Coordination:** weekly roadmap reviews, sprint planning per phase, cross-functional demos (UX, ops, AI).
+- **Risk Mitigation:** early adoption of container security, LLM safety nets, overall DAG to avoid long single-threaded path (phases overlap once foundations stable).
+
