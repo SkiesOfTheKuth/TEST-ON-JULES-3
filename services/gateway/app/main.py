@@ -47,20 +47,24 @@ tracer = trace.get_tracer(__name__)
 async def startup_event() -> None:
     app.state.settings = settings
     app.state.redis = Redis.from_url(settings.redis.url, decode_responses=True)
-    app.state.cache = ResultCache(app.state.redis, settings.redis.cache_ttl_seconds)
+    app.state.cache = ResultCache(
+        app.state.redis,
+        settings.redis.cache_ttl_seconds,
+        namespace=settings.redis.cache_namespace,
+    )
     rate_counter_ttl = settings.redis.rate_counter_ttl_seconds
     app.state.rate_limit_key = RateLimiter(
         app.state.redis,
         settings.redis.rate_limit_requests,
         settings.redis.rate_limit_window_seconds,
-        "rate",
+        settings.redis.rate_namespace,
         ttl_seconds=rate_counter_ttl,
     )
     app.state.rate_limit_ip = RateLimiter(
         app.state.redis,
         settings.redis.rate_limit_requests * 2,
         settings.redis.rate_limit_window_seconds,
-        "limiter",
+        settings.redis.limiter_namespace,
         ttl_seconds=rate_counter_ttl,
     )
     app.state.quota_config = QuotaConfig(
