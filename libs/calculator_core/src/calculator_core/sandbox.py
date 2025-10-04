@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import math
 import multiprocessing as mp
-import resource
 import time
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from typing import Any, Dict, Mapping, Optional
 
 from asteval import Interpreter
+
+try:
+    import resource  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - Windows and other platforms without resource
+    resource = None  # type: ignore[assignment]
 
 from .allowlist import default_allowlist
 
@@ -87,12 +91,16 @@ def _worker(
     allowed_symbols: Dict[str, object],
     config: SandboxConfig,
 ) -> None:
-    try:
-        resource.setrlimit(resource.RLIMIT_AS, (config.max_memory_bytes, config.max_memory_bytes))
-        cpu_seconds = max(1, math.ceil(config.max_runtime_seconds))
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
-    except (ValueError, OSError):
-        # Ignore platforms that do not support RLIMIT_AS.
+    if resource is not None:
+        try:
+            resource.setrlimit(resource.RLIMIT_AS, (config.max_memory_bytes, config.max_memory_bytes))
+            cpu_seconds = max(1, math.ceil(config.max_runtime_seconds))
+            resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+        except (ValueError, OSError):
+            # Ignore platforms that do not support RLIMIT_AS.
+            pass
+    else:
+        # Windows platforms do not expose resource; rely on process timeouts instead.
         pass
 
     try:
