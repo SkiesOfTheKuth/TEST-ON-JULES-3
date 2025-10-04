@@ -1,0 +1,11 @@
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: slack-primary
+    routes:
+      - receiver: email-ops
+        matchers:
+          - label: severity
+            match: '='
+            value: critical

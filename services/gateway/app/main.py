@@ -7,6 +7,9 @@ import logging
 import time
 
 import grpc
+from opentelemetry import trace
+from opentelemetry.propagate import inject
+from opentelemetry.trace import SpanKind, Status, StatusCode
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
@@ -17,7 +20,12 @@ from services.protos import evaluator_pb2, evaluator_pb2_grpc
 from .cache import ResultCache
 from .config import get_settings
 from .database import get_session, init_db
-from .instrumentation import configure_tracing, instrument_app
+from .instrumentation import (
+    configure_logging,
+    configure_tracing,
+    instrument_app,
+    record_rate_limit_rejection,
+)
 from .models import RequestAudit
 from .quota import QuotaConfig, QuotaExceededError, consume_quota
 from .rate_limit import RateLimiter
@@ -27,9 +35,12 @@ from .security import AuthenticatedAPIKey, get_api_key
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+configure_logging(settings)
 configure_tracing(settings)
 app = FastAPI(title="Calculator Gateway", version="1.0.0")
 instrument_app(app, settings)
+
+tracer = trace.get_tracer(__name__)
 
 
 @app.on_event("startup")
@@ -93,6 +104,7 @@ async def calculate_sync(
     expression_hash = payload.hash(api_key.raw_key)
 
     if not await rate_limiter_key.allow(str(api_key_id)):
+        record_rate_limit_rejection("api_key")
         await _persist_audit(
             api_key_id,
             expression_hash,
@@ -103,6 +115,7 @@ async def calculate_sync(
         )
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="API key rate limit exceeded")
     if not await rate_limiter_ip.allow(client_ip):
+        record_rate_limit_rejection("ip")
         await _persist_audit(
             api_key_id,
             expression_hash,
@@ -147,10 +160,30 @@ async def calculate_sync(
 
     start_time = time.perf_counter()
     try:
-        response = await stub.Evaluate(
-            request_message,
-            timeout=settings.evaluator.deadline_ms / 1000,
-        )
+        metadata = _build_grpc_metadata(request)
+        with tracer.start_as_current_span(
+            "gateway.grpc.evaluate",
+            kind=SpanKind.CLIENT,
+        ) as span:
+            span.set_attribute("rpc.system", "grpc")
+            span.set_attribute("rpc.service", "calculator.Evaluator")
+            span.set_attribute("rpc.method", "Evaluate")
+            span.set_attribute("net.peer.name", settings.evaluator.host)
+            span.set_attribute("net.peer.port", settings.evaluator.port)
+            try:
+                response = await stub.Evaluate(
+                    request_message,
+                    timeout=settings.evaluator.deadline_ms / 1000,
+                    metadata=metadata,
+                )
+            except grpc.AioRpcError as exc:
+                span.record_exception(exc)
+                span.set_attribute("rpc.grpc.status_code", exc.code().name)
+                span.set_status(Status(StatusCode.ERROR, exc.details() or exc.code().name))
+                raise
+            else:
+                span.set_attribute("rpc.grpc.status_code", grpc.StatusCode.OK.name)
+                span.set_status(Status(StatusCode.OK))
     except grpc.AioRpcError as exc:
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         status_code = exc.code()
@@ -275,3 +308,13 @@ async def _persist_audit(
         session.add(audit)
         await session.commit()
         break
+
+
+def _build_grpc_metadata(request: Request) -> list[tuple[str, str]]:
+    carrier: dict[str, str] = {}
+    inject(carrier)
+    metadata = list(carrier.items())
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        metadata.append(("x-request-id", request_id))
+    return metadata

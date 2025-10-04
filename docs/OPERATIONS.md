@@ -46,11 +46,17 @@
 
 ## Observability Stack
 
-* Grafana dashboards can be imported from `observability/dashboards/` (create folder as needed). Suggested panels:
-  - Gateway request rate, p95 latency, error rate.
-  - Safe evaluator duration histogram, sandbox failures.
-* Tempo listens on port `4318` for OTLP traces. Ensure `GATEWAY_OBSERVABILITY__OTLP_ENDPOINT=http://tempo:4318/v1/traces` is set when running in Compose.
-* Loki/Promtail collect JSON logs. Configure Grafana data sources for Prometheus, Tempo, and Loki on first launch.
+The Compose environment now ships a full observability suite wired end-to-end:
+
+* **Tracing:** Both the FastAPI gateway and gRPC evaluator emit OpenTelemetry traces with W3C context propagation (`traceparent` header → gRPC metadata). Spans are exported to Tempo via OTLP/HTTP (`http://tempo:4318/v1/traces`).
+* **Metrics:**
+  - Gateway exposes Prometheus metrics on `:8080/metrics`, including request counters (`calculator_gateway_requests_total`), latency histograms, and a rolling gauge of rate-limit rejections per reason.
+  - The evaluator publishes metrics on `:9464` covering execution duration histograms, in-flight queue depth, sandbox restart counters, and default process resource gauges.
+  - Prometheus scrapes both endpoints (`observability/prometheus.yml`).
+* **Logging:** Structured JSON logs with `request_id`, `trace_id`, and `span_id` are shipped to Loki via a Promtail sidecar that tails Docker logs (`observability/promtail-config.yaml`).
+* **Dashboards & Alerts:** Grafana is pre-provisioned with data sources, dashboards (`Gateway Overview`, `Evaluator Health`), and alert rules. Dashboards live under `observability/grafana/dashboards/`; provisioning (data sources, alert contact points, notification policies, rules) is in `observability/grafana/provisioning/`.
+
+> Tip: `docker compose -f docker-compose.phase1.yml up --build` launches the entire stack. Grafana is reachable on `http://localhost:3000` (admin password `grafana`).
 
 ## Resiliency Drills
 

@@ -6,46 +6,20 @@ import asyncio
 import logging
 
 import grpc
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor
-from pythonjsonlogger import jsonlogger
 
-from .config import EvaluatorSettings, get_settings
+from .config import get_settings
+from .observability import configure_logging, configure_metrics, configure_tracing
 from .service import EvaluatorService
 from services.protos import evaluator_pb2_grpc
 
 logger = logging.getLogger(__name__)
 
 
-def configure_logging(level: str) -> None:
-    handler = logging.StreamHandler()
-    handler.setFormatter(
-        jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
-    )
-    root = logging.getLogger()
-    root.handlers.clear()
-    root.addHandler(handler)
-    root.setLevel(getattr(logging, level.upper(), logging.INFO))
-
-
-def configure_tracing(settings: EvaluatorSettings) -> None:
-    resource = Resource.create({"service.name": "calculator-safe-evaluator"})
-    provider = TracerProvider(resource=resource)
-    if settings.otlp_endpoint:
-        exporter = OTLPSpanExporter(endpoint=settings.otlp_endpoint)
-        provider.add_span_processor(BatchSpanProcessor(exporter))
-    else:
-        provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
-    trace.set_tracer_provider(provider)
-
-
 async def serve() -> None:
     settings = get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(settings)
     configure_tracing(settings)
+    configure_metrics(settings)
 
     server = grpc.aio.server()
     evaluator = EvaluatorService(settings)
