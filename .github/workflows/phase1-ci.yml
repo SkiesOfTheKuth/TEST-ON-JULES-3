@@ -103,6 +103,31 @@ jobs:
             coverage/combined-coverage.xml
             coverage/combined-coverage.json
 
+  security-static-analysis:
+    name: Static Application Security Tests
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install analysis tools
+        run: pip install bandit semgrep
+
+      - name: Run Bandit
+        run: |
+          bandit -r services/gateway/app services/safe_evaluator/app libs/calculator_core/src libs/calculator_logic/src \
+            --severity-level medium --confidence-level medium --quiet \
+            --exclude services/gateway/app/scripts/seed_api_key.py
+
+      - name: Run Semgrep
+        run: semgrep --config .semgrep.yaml services/gateway/app services/safe_evaluator/app libs
+
   integration-tests:
     name: Integration Smoke Tests
     needs: lint-and-test
@@ -142,7 +167,9 @@ jobs:
 
   docker-build:
     name: Build & Push Images
-    needs: integration-tests
+    needs:
+      - integration-tests
+      - security-static-analysis
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -203,6 +230,27 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
+
+  sbom:
+    name: Generate SBOM
+    needs: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate SBOM with Syft
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          output-file: sbom/sbom.spdx.json
+          output-format: spdx-json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom/sbom.spdx.json
 
   dependabot-review:
     name: Dependabot Dependency Review
