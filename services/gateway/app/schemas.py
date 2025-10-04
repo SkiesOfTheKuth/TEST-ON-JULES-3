@@ -56,6 +56,7 @@ class JobStatusResponse(BaseModel):
     completed_at: Optional[dt.datetime] = None
     priority: int
     tags: list[str] = Field(default_factory=list)
+    links: Dict[str, str] = Field(default_factory=dict)
 
 
 class JobResultResponse(JobStatusResponse):

@@ -54,6 +54,13 @@ class JobSettings(BaseModel):
     max_queue_size: int = 1000
     max_concurrency: int = 10
     priority_levels: int = 3
+    queue_name: str = "calculator-jobs"
+    cache_namespace: str = "jobs"
+    rate_limit_requests: int = 5
+    rate_limit_window_seconds: int = 1
+    max_retries: int = 3
+    retry_backoff_seconds: float = 2.0
+    rate_namespace: str = "job_rate"
 
 
 class GatewaySettings(BaseSettings):

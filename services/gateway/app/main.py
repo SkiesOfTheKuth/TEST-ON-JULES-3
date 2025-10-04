@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from pathlib import Path
-from typing import Optional
 
 from services.common.grpc import grpc
 from opentelemetry import trace
@@ -19,9 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.protos import evaluator_pb2, evaluator_pb2_grpc
 
-from .cache import ResultCache
-from .config import EvaluatorSettings, get_settings
+from . import jobs
+from .cache import JobCache, ResultCache
+from .config import get_settings
 from .database import get_session, init_db
+from .evaluator_client import build_grpc_metadata, create_async_channel
 from .instrumentation import (
     configure_logging,
     configure_tracing,
@@ -31,8 +31,14 @@ from .instrumentation import (
 from .models import RequestAudit
 from .quota import QuotaConfig, QuotaExceededError, consume_quota
 from .rate_limit import RateLimiter
-from .schemas import CalculationResponse, ExpressionRequest
+from .schemas import (
+    CalculationResponse,
+    ExpressionRequest,
+    JobResultResponse,
+    JobSubmissionRequest,
+)
 from .security import AuthenticatedAPIKey, get_api_key
+from .task_queue import enqueue_job
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +60,11 @@ async def startup_event() -> None:
         settings.redis.cache_ttl_seconds,
         namespace=settings.redis.cache_namespace,
     )
+    app.state.job_cache = JobCache(
+        app.state.redis,
+        settings.job.default_ttl_seconds,
+        namespace=settings.job.cache_namespace,
+    )
     rate_counter_ttl = settings.redis.rate_counter_ttl_seconds
     app.state.rate_limit_key = RateLimiter(
         app.state.redis,
@@ -69,12 +80,19 @@ async def startup_event() -> None:
         settings.redis.limiter_namespace,
         ttl_seconds=rate_counter_ttl,
     )
+    app.state.job_rate_limit_key = RateLimiter(
+        app.state.redis,
+        settings.job.rate_limit_requests,
+        settings.job.rate_limit_window_seconds,
+        settings.job.rate_namespace,
+        ttl_seconds=rate_counter_ttl,
+    )
     app.state.quota_config = QuotaConfig(
         limit=settings.quota.limit,
         window_seconds=settings.quota.window_seconds,
     )
     await init_db(settings)
-    app.state.grpc_channel = _create_grpc_channel(settings.evaluator)
+    app.state.grpc_channel = create_async_channel(settings.evaluator)
     app.state.grpc_stub = evaluator_pb2_grpc.EvaluatorStub(app.state.grpc_channel)
     logger.info("Gateway started on %s:%s", settings.host, settings.port)
 
@@ -169,7 +187,8 @@ async def calculate_sync(
 
     start_time = time.perf_counter()
     try:
-        metadata = _build_grpc_metadata(request)
+        request_id = getattr(request.state, "request_id", None)
+        metadata = build_grpc_metadata(request_id=request_id)
         with tracer.start_as_current_span(
             "gateway.grpc.evaluate",
             kind=SpanKind.CLIENT,
@@ -287,6 +306,70 @@ async def calculate(
     return await calculate_sync(payload, request, api_key=api_key, session=session)
 
 
+@app.post("/jobs", response_model=JobResultResponse, status_code=status.HTTP_202_ACCEPTED)
+async def submit_job(
+    payload: JobSubmissionRequest,
+    request: Request,
+    api_key: AuthenticatedAPIKey = Depends(require_api_key),
+    session: AsyncSession = Depends(get_session),
+) -> JobResultResponse:
+    api_key_id = api_key.record.id
+    job_rate_limiter: RateLimiter = app.state.job_rate_limit_key
+    if not await job_rate_limiter.allow(str(api_key_id)):
+        record_rate_limit_rejection("job_api_key")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="API key job rate limit exceeded",
+        )
+
+    if settings.job.max_queue_size > 0:
+        queued_jobs = await jobs.count_queued_jobs(session)
+        if queued_jobs >= settings.job.max_queue_size:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Job queue is full",
+            )
+
+    try:
+        await consume_quota(session, api_key_id, app.state.quota_config)
+    except QuotaExceededError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+
+    job = await jobs.create_job(session, payload, settings=settings)
+    job_cache: JobCache = app.state.job_cache
+    job_payload = jobs.serialize_job(job, settings)
+    await job_cache.set(job.id, job_payload)
+
+    trace_headers: dict[str, str] = {}
+    inject(trace_headers)
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        trace_headers.setdefault("x-request-id", request_id)
+    enqueue_job(job.id, trace_context=trace_headers)
+
+    return JobResultResponse(**job_payload)
+
+
+@app.get("/jobs/{job_id}", response_model=JobResultResponse)
+async def get_job(
+    job_id: str,
+    api_key: AuthenticatedAPIKey = Depends(require_api_key),
+    session: AsyncSession = Depends(get_session),
+) -> JobResultResponse:
+    job_cache: JobCache = app.state.job_cache
+    cached = await job_cache.get(job_id)
+    if cached is not None:
+        return JobResultResponse(**cached)
+
+    job = await jobs.fetch_job(session, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    payload = jobs.serialize_job(job, settings)
+    await job_cache.set(job.id, payload)
+    return JobResultResponse(**payload)
+
+
 @app.get("/health/live")
 async def live() -> JSONResponse:
     return JSONResponse({"status": "ok"})
@@ -317,34 +400,3 @@ async def _persist_audit(
         session.add(audit)
         await session.commit()
         break
-
-
-def _create_grpc_channel(evaluator: EvaluatorSettings) -> grpc.aio.Channel:
-    target = f"{evaluator.host}:{evaluator.port}"
-    if evaluator.use_tls:
-        credentials = grpc.ssl_channel_credentials(
-            root_certificates=_read_optional_bytes(evaluator.root_cert_path),
-            private_key=_read_optional_bytes(evaluator.client_key_path),
-            certificate_chain=_read_optional_bytes(evaluator.client_cert_path),
-        )
-        return grpc.aio.secure_channel(target, credentials)
-    return grpc.aio.insecure_channel(target)
-
-
-def _read_optional_bytes(path: Optional[Path]) -> Optional[bytes]:
-    if path is None:
-        return None
-    resolved = Path(path).expanduser()
-    if not resolved.exists():
-        raise RuntimeError(f"gRPC credential file not found: {resolved}")
-    return resolved.read_bytes()
-
-
-def _build_grpc_metadata(request: Request) -> list[tuple[str, str]]:
-    carrier: dict[str, str] = {}
-    inject(carrier)
-    metadata = list(carrier.items())
-    request_id = getattr(request.state, "request_id", None)
-    if request_id:
-        metadata.append(("x-request-id", request_id))
-    return metadata
