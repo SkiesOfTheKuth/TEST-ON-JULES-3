@@ -1,27 +1,26 @@
 PYTHON ?= python3
+POETRY ?= poetry
 
 .PHONY: bootstrap lint test run-gateway run-evaluator compose-up compose-down
 
 bootstrap:
-	$(PYTHON) -m pip install -e libs/calculator_logic
-	$(PYTHON) -m pip install -e libs/calculator_core
-	$(PYTHON) -m pip install -e services/gateway
-	$(PYTHON) -m pip install -e services/safe_evaluator
+$(POETRY) -C services/gateway install
+$(POETRY) -C services/safe_evaluator install
 
 lint:
-	ruff check .
+$(POETRY) -C services/gateway run ruff check app ../safe_evaluator/app ../../libs
 
 test:
-	pytest
+$(POETRY) -C services/safe_evaluator run pytest ../../tests
 
 run-gateway:
-	uvicorn services.gateway.app.main:app --host 0.0.0.0 --port 8080 --reload
+$(POETRY) -C services/gateway run uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 
 run-evaluator:
-	$(PYTHON) -m services.safe_evaluator.app.server
+$(POETRY) -C services/safe_evaluator run python -m app.server
 
 compose-up:
-	docker compose -f docker-compose.phase1.yml up --build
+docker compose -f docker-compose.phase1.yml up --build
 
 compose-down:
-	docker compose -f docker-compose.phase1.yml down
+docker compose -f docker-compose.phase1.yml down
