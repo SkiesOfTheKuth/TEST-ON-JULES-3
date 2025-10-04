@@ -12,19 +12,7 @@ from typing import Any, Dict, Mapping, Optional
 
 from asteval import Interpreter
 
-from calculator_logic import (
-    ABSOLUTE_FUNCTIONS,
-    LOG_FUNCTIONS,
-    TRIGONOMETRIC_FUNCTIONS,
-    add,
-    divide,
-    factorial,
-    multiply,
-    power,
-    round_number,
-    sqrt,
-    subtract,
-)
+from .allowlist import default_allowlist
 
 
 @dataclass(slots=True)
@@ -47,12 +35,24 @@ class SandboxRunner:
 
     def __init__(self, config: SandboxConfig | None = None) -> None:
         self._config = config or SandboxConfig()
+        self._ctx = mp.get_context("spawn")
 
-    def run(self, expression: str, context: Mapping[str, Any] | None = None) -> SandboxResult:
+    def run(
+        self,
+        expression: str,
+        context: Mapping[str, Any] | None = None,
+        allowed_symbols: Mapping[str, object] | None = None,
+    ) -> SandboxResult:
         parent_conn, child_conn = mp.Pipe()
-        process = mp.Process(
+        process = self._ctx.Process(
             target=_worker,
-            args=(child_conn, expression, dict(context or {}), self._config),
+            args=(
+                child_conn,
+                expression,
+                dict(context or {}),
+                dict(allowed_symbols or {}),
+                self._config,
+            ),
             daemon=True,
         )
         start = time.perf_counter()
@@ -80,15 +80,23 @@ class SandboxRunner:
         return SandboxResult(True, float(value), None, duration_ms)
 
 
-def _worker(conn: Connection, expression: str, context: Dict[str, Any], config: SandboxConfig) -> None:
+def _worker(
+    conn: Connection,
+    expression: str,
+    context: Dict[str, Any],
+    allowed_symbols: Dict[str, object],
+    config: SandboxConfig,
+) -> None:
     try:
         resource.setrlimit(resource.RLIMIT_AS, (config.max_memory_bytes, config.max_memory_bytes))
+        cpu_seconds = max(1, math.ceil(config.max_runtime_seconds))
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
     except (ValueError, OSError):
         # Ignore platforms that do not support RLIMIT_AS.
         pass
 
     try:
-        result = _evaluate(expression, context)
+        result = _evaluate(expression, context, allowed_symbols)
     except Exception as exc:  # noqa: BLE001
         conn.send({"ok": False, "error": str(exc)})
     else:
@@ -97,35 +105,33 @@ def _worker(conn: Connection, expression: str, context: Dict[str, Any], config: 
         conn.close()
 
 
-def _evaluate(expression: str, context: Mapping[str, Any]) -> float:
+def _evaluate(
+    expression: str,
+    context: Mapping[str, Any],
+    allowed_symbols: Mapping[str, object],
+) -> float:
     interpreter = Interpreter(use_numpy=False)
     interpreter.symtable.clear()
+    interpreter.symtable["__builtins__"] = {}
 
-    interpreter.symtable.update(
-        {
-            "add": add,
-            "subtract": subtract,
-            "multiply": multiply,
-            "divide": divide,
-            "power": power,
-            "sqrt": sqrt,
-            "factorial": factorial,
-            "round": round_number,
-        }
-    )
-    interpreter.symtable.update(TRIGONOMETRIC_FUNCTIONS)
-    interpreter.symtable.update(LOG_FUNCTIONS)
-    interpreter.symtable.update(ABSOLUTE_FUNCTIONS)
+    if allowed_symbols:
+        symbols = dict(allowed_symbols)
+    else:
+        symbols = default_allowlist()
+
+    interpreter.symtable.update(symbols)
 
     sanitized_context: Dict[str, float] = {}
     for key, value in context.items():
         if not key.isidentifier():
             raise ValueError(f"Context key {key!r} is not a valid identifier")
+        if key in interpreter.symtable:
+            raise ValueError(f"Context key {key!r} collides with a reserved symbol")
         sanitized_context[key] = float(value)
     interpreter.symtable.update(sanitized_context)
 
     value = interpreter(expression)
     if interpreter.error:
-        message = ", ".join(err.get_error() for err in interpreter.error)
+        message = ", ".join(str(err.get_error()) for err in interpreter.error)
         raise ValueError(message)
     return float(value)

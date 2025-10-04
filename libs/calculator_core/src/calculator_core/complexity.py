@@ -7,14 +7,22 @@ from dataclasses import dataclass
 
 
 @dataclass(slots=True)
+class ComplexityMetrics:
+    depth: int
+    nodes: int
+    score: int
+
+
+@dataclass(slots=True)
 class ComplexityBudget:
     """Simple heuristic scoring for AST complexity."""
 
     max_depth: int
     max_nodes: int
+    max_score: int
 
-    def score(self, tree: ast.AST) -> tuple[int, int]:
-        """Return the depth and number of nodes for *tree*."""
+    def score(self, tree: ast.AST) -> ComplexityMetrics:
+        """Return complexity metrics for *tree*."""
 
         max_depth = 0
         total_nodes = 0
@@ -27,11 +35,21 @@ class ComplexityBudget:
                 walk(child, depth + 1)
 
         walk(tree, 1)
-        return max_depth, total_nodes
+        score = max_depth * max_depth + total_nodes
+        return ComplexityMetrics(depth=max_depth, nodes=total_nodes, score=score)
 
-    def validate(self, tree: ast.AST) -> None:
-        depth, nodes = self.score(tree)
-        if depth > self.max_depth:
-            raise ValueError(f"AST depth {depth} exceeds limit {self.max_depth}")
-        if nodes > self.max_nodes:
-            raise ValueError(f"AST node count {nodes} exceeds limit {self.max_nodes}")
+    def validate(self, tree: ast.AST) -> ComplexityMetrics:
+        metrics = self.score(tree)
+        if metrics.depth > self.max_depth:
+            raise ValueError(
+                f"AST depth {metrics.depth} exceeds limit {self.max_depth}"
+            )
+        if metrics.nodes > self.max_nodes:
+            raise ValueError(
+                f"AST node count {metrics.nodes} exceeds limit {self.max_nodes}"
+            )
+        if metrics.score > self.max_score:
+            raise ValueError(
+                f"AST complexity score {metrics.score} exceeds limit {self.max_score}"
+            )
+        return metrics

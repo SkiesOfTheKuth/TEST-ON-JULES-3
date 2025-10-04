@@ -1,0 +1,20 @@
+{
+  "functions": [
+    "add",
+    "subtract",
+    "multiply",
+    "divide",
+    "power",
+    "sqrt",
+    "factorial",
+    "round",
+    "round_number",
+    "sin",
+    "cos",
+    "tan",
+    "log",
+    "log10",
+    "abs",
+    "absolute"
+  ]
+}

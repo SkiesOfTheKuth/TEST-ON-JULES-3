@@ -1,3 +1,5 @@
+import pytest
+
 from calculator_core import ExpressionValidator, ValidationError
 
 
@@ -15,3 +17,9 @@ def test_validator_blocks_attribute_access():
         assert "Attribute access" in str(exc)
     else:
         raise AssertionError("attribute access should be blocked")
+
+
+def test_validator_rejects_unknown_identifier():
+    validator = ExpressionValidator.default()
+    with pytest.raises(ValidationError):
+        validator.validate("foo + 1", allowed_identifiers={"bar"})
