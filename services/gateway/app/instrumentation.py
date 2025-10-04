@@ -7,7 +7,7 @@ from collections import deque
 import logging
 import time
 import uuid
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from fastapi import FastAPI
 from opentelemetry import trace

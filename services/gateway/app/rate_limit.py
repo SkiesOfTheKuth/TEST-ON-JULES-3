@@ -16,6 +16,7 @@ class RateLimiter:
         local now = tonumber(ARGV[1])
         local window = tonumber(ARGV[2])
         local limit = tonumber(ARGV[3])
+        local ttl = tonumber(ARGV[4])
 
         redis.call('ZREMRANGEBYSCORE', key, '-inf', now - window)
         local current = redis.call('ZCARD', key)
@@ -24,15 +25,25 @@ class RateLimiter:
         end
 
         redis.call('ZADD', key, now, now)
-        redis.call('PEXPIRE', key, window)
+        if ttl > 0 then
+            redis.call('PEXPIRE', key, ttl)
+        end
         return 1
     """
 
-    def __init__(self, redis: Redis, limit: int, window_seconds: int, namespace: str) -> None:
+    def __init__(
+        self,
+        redis: Redis,
+        limit: int,
+        window_seconds: int,
+        namespace: str,
+        ttl_seconds: int | None = None,
+    ) -> None:
         self._redis = redis
         self._limit = limit
         self._window = window_seconds
         self._namespace = namespace
+        self._ttl = ttl_seconds if ttl_seconds is not None else window_seconds
 
     async def allow(self, key: str) -> bool:
         if self._limit <= 0:
@@ -46,5 +57,6 @@ class RateLimiter:
             now_ms,
             self._window * 1000,
             self._limit,
+            int(self._ttl * 1000),
         )
         return bool(result)
