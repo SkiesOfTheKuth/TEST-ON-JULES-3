@@ -36,6 +36,11 @@ class ObservabilitySettings(BaseModel):
     metrics_namespace: str = "calculator_gateway"
 
 
+class QuotaSettings(BaseModel):
+    limit: int = 1000
+    window_seconds: int = 60
+
+
 class GatewaySettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="GATEWAY_",
@@ -50,6 +55,7 @@ class GatewaySettings(BaseSettings):
     database: DatabaseSettings = DatabaseSettings()
     evaluator: EvaluatorSettings = EvaluatorSettings()
     observability: ObservabilitySettings = ObservabilitySettings()
+    quota: QuotaSettings = QuotaSettings()
     audit_batch_size: int = 100
     cache_pure_results: bool = True
     allowed_origins: list[str] = ["*"]
