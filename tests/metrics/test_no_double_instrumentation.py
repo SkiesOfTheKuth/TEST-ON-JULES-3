@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import time
 
 from prometheus_client import generate_latest
@@ -9,14 +10,34 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import InMemorySpanExporter, SimpleSpanProcessor
 
 from src.observability.metrics import get_job_metrics
+from tests.observability.test_spans_job_flow import _restore_otel_modules
 
 
 def _install_worker_tracing():
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
+    _restore_otel_modules()
+    prev_sampler = os.environ.get("OTEL_TRACES_SAMPLER")
+    prev_arg = os.environ.get("OTEL_TRACES_SAMPLER_ARG")
+    if prev_sampler is None:
+        os.environ["OTEL_TRACES_SAMPLER"] = "parentbased_always_on"
+    if prev_arg is None:
+        os.environ.pop("OTEL_TRACES_SAMPLER_ARG", None)
+    trace_module = importlib.import_module("opentelemetry.trace")
+    sdk_trace_module = importlib.import_module("opentelemetry.sdk.trace")
+    sdk_export_module = importlib.import_module("opentelemetry.sdk.trace.export")
+    exporter = sdk_export_module.InMemorySpanExporter()
+    provider = sdk_trace_module.TracerProvider()
+    provider.add_span_processor(sdk_export_module.SimpleSpanProcessor(exporter))
+    trace_module.set_tracer_provider(provider)
+    trace = trace_module
     worker_instr = importlib.reload(importlib.import_module("src.worker.instrumentation"))
+    if prev_sampler is None:
+        os.environ.pop("OTEL_TRACES_SAMPLER", None)
+    else:
+        os.environ["OTEL_TRACES_SAMPLER"] = prev_sampler
+    if prev_arg is None:
+        os.environ.pop("OTEL_TRACES_SAMPLER_ARG", None)
+    else:
+        os.environ["OTEL_TRACES_SAMPLER_ARG"] = prev_arg
     return exporter, worker_instr
 
 

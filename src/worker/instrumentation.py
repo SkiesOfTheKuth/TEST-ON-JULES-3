@@ -11,6 +11,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Optional, Tuple, 
 from weakref import WeakKeyDictionary
 
 from celery import Celery
+_existing_signals = globals().get("signals")
 try:  # pragma: no cover - optional Celery dependency
     from celery import signals  # type: ignore[attr-defined]
 except ImportError:  # pragma: no cover - fallback for test doubles
@@ -20,6 +21,7 @@ except ImportError:  # pragma: no cover - fallback for test doubles
 
         def connect(self, receiver: Callable[..., None] | None = None, *, sender: Celery | None = None, **_: Any):
             if receiver is None:
+
                 def decorator(func: Callable[..., None]) -> Callable[..., None]:
                     self._receivers.append((func, sender))
                     return func
@@ -42,7 +44,17 @@ except ImportError:  # pragma: no cover - fallback for test doubles
             self.task_failure = _Signal()
             self.task_retry = _Signal()
 
-    signals = _SignalNamespace()
+    if _existing_signals and all(
+        hasattr(_existing_signals, attr) for attr in ("task_prerun", "task_postrun", "task_failure", "task_retry")
+    ):
+        for attr in ("task_prerun", "task_postrun", "task_failure", "task_retry"):
+            signal_obj = getattr(_existing_signals, attr, None)
+            receivers = getattr(signal_obj, "_receivers", None)
+            if isinstance(receivers, list):
+                receivers.clear()
+        signals = _existing_signals  # type: ignore[assignment]
+    else:
+        signals = _SignalNamespace()
 from fastapi import FastAPI
 from opentelemetry import trace
 from opentelemetry.propagate import extract

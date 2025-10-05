@@ -146,4 +146,3 @@ def set_request_id(request_id: str) -> contextvars.Token[str]:
 
 def reset_request_id(token: contextvars.Token[str]) -> None:
     REQUEST_ID_CONTEXT.reset(token)
-*** End of File ***

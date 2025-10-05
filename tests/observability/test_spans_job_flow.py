@@ -1,29 +1,97 @@
 from __future__ import annotations
 
 import importlib
+import os
 import re
+import sys
 import time
 from collections import Counter
 from typing import Iterable, Mapping
 
 import pytest
-from opentelemetry import trace
-from opentelemetry.propagate import extract
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import InMemorySpanExporter, SimpleSpanProcessor
-from opentelemetry.trace import SpanContext, StatusCode
 
-from src.observability.metrics import get_job_metrics
+trace = None
+extract = None
+TracerProvider = None
+InMemorySpanExporter = None
+SimpleSpanProcessor = None
+SpanContext = None
+StatusCode = None
+get_job_metrics = None
+
+
+def _restore_otel_modules() -> None:
+    """Ensure our in-repo OpenTelemetry shims replace any test stubs."""
+
+    otel_modules = [
+        "opentelemetry",
+        "opentelemetry.trace",
+        "opentelemetry.propagate",
+        "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+        "opentelemetry.sdk.trace",
+        "opentelemetry.sdk.trace.export",
+        "opentelemetry.sdk.resources",
+        "prometheus_client",
+    ]
+    removed = False
+    for name in otel_modules:
+        module = sys.modules.get(name)
+        if module is not None and not getattr(module, "__file__", None):
+            sys.modules.pop(name, None)
+            removed = True
+    if removed:
+        importlib.invalidate_caches()
+    trace_module = importlib.import_module("opentelemetry.trace")
+    propagate_module = importlib.import_module("opentelemetry.propagate")
+    sdk_trace_module = importlib.import_module("opentelemetry.sdk.trace")
+    sdk_export_module = importlib.import_module("opentelemetry.sdk.trace.export")
+    importlib.import_module("opentelemetry.sdk.resources")
+    importlib.import_module("prometheus_client")
+    metrics_module = importlib.import_module("src.observability.metrics")
+
+    globals().update(
+        trace=trace_module,
+        extract=propagate_module.extract,
+        TracerProvider=sdk_trace_module.TracerProvider,
+        InMemorySpanExporter=sdk_export_module.InMemorySpanExporter,
+        SimpleSpanProcessor=sdk_export_module.SimpleSpanProcessor,
+        SpanContext=trace_module.SpanContext,
+        StatusCode=trace_module.StatusCode,
+        get_job_metrics=metrics_module.get_job_metrics,
+    )
+
+
+_restore_otel_modules()
 
 
 def _install_tracing() -> tuple[InMemorySpanExporter, object, object]:
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
+    _restore_otel_modules()
+    prev_sampler = os.environ.get("OTEL_TRACES_SAMPLER")
+    prev_arg = os.environ.get("OTEL_TRACES_SAMPLER_ARG")
+    if prev_sampler is None:
+        os.environ["OTEL_TRACES_SAMPLER"] = "parentbased_always_on"
+    if prev_arg is None:
+        os.environ.pop("OTEL_TRACES_SAMPLER_ARG", None)
+    trace_module = importlib.import_module("opentelemetry.trace")
+    sdk_trace_module = importlib.import_module("opentelemetry.sdk.trace")
+    sdk_export_module = importlib.import_module("opentelemetry.sdk.trace.export")
+    exporter = sdk_export_module.InMemorySpanExporter()
+    provider = sdk_trace_module.TracerProvider()
+    provider.add_span_processor(sdk_export_module.SimpleSpanProcessor(exporter))
+    trace_module.set_tracer_provider(provider)
+    globals()["trace"] = trace_module
 
     gateway_instrumentation = importlib.reload(importlib.import_module("src.gateway.instrumentation"))
     worker_instrumentation = importlib.reload(importlib.import_module("src.worker.instrumentation"))
+
+    if prev_sampler is None:
+        os.environ.pop("OTEL_TRACES_SAMPLER", None)
+    else:
+        os.environ["OTEL_TRACES_SAMPLER"] = prev_sampler
+    if prev_arg is None:
+        os.environ.pop("OTEL_TRACES_SAMPLER_ARG", None)
+    else:
+        os.environ["OTEL_TRACES_SAMPLER_ARG"] = prev_arg
     return exporter, gateway_instrumentation, worker_instrumentation
 
 

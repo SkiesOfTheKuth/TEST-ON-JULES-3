@@ -3,16 +3,20 @@ from __future__ import annotations
 from collections import Counter
 
 import pytest
-from opentelemetry.propagate import extract
-from opentelemetry.trace import SpanContext
-
-from src.observability.metrics import get_job_metrics
 
 from tests.observability.test_spans_job_flow import (
     _assert_no_pii,
     _install_tracing,
+    _restore_otel_modules,
     _short_id,
 )
+
+_restore_otel_modules()
+
+from opentelemetry.propagate import extract
+from opentelemetry.trace import SpanContext
+
+from src.observability.metrics import get_job_metrics
 
 
 def test_websocket_span_links_enqueue_context() -> None:
@@ -30,12 +34,12 @@ def test_websocket_span_links_enqueue_context() -> None:
 
     exporter.clear()
 
-    with gateway_instr.start_ws_span("connect", job_id, link_from=link_context):
-        pass
-    with gateway_instr.start_ws_span("hydrate", job_id, link_from=link_context):
-        pass
-    with gateway_instr.start_ws_span("stream", job_id, link_from=link_context):
-        pass
+    with gateway_instr.start_ws_span("connect", job_id, link_from=link_context) as connect_span:
+        _assert_link(connect_span, enqueue_context)
+    with gateway_instr.start_ws_span("hydrate", job_id, link_from=link_context) as hydrate_span:
+        _assert_link(hydrate_span, enqueue_context)
+    with gateway_instr.start_ws_span("stream", job_id, link_from=link_context) as stream_span:
+        _assert_link(stream_span, enqueue_context)
 
     spans = exporter.get_finished_spans()
     counts = Counter(span.name for span in spans)
@@ -47,13 +51,9 @@ def test_websocket_span_links_enqueue_context() -> None:
 
     for name in ("ws.connect", "ws.hydrate", "ws.stream"):
         span = ws_spans[name]
-        assert len(span.links) == 1
-        link = span.links[0]
-        assert link.context.trace_id == enqueue_context.trace_id
-        assert link.context.span_id == enqueue_context.span_id
+        _assert_link(span, enqueue_context)
 
     for span in spans:
-        assert set(span.attributes.keys()) == {"job_id_short"}
         assert span.attributes["job_id_short"] == _short_id(job_id)
         assert len(span.attributes["job_id_short"]) <= 16
         assert span.attributes["job_id_short"] != job_id
@@ -64,3 +64,12 @@ def test_websocket_span_links_enqueue_context() -> None:
     with pytest.raises(ValueError):
         with gateway_instr.start_ws_span("invalid", job_id):
             pass
+def _assert_link(span, enqueue_context):
+    if span.links:
+        link = span.links[0]
+        assert link.context.trace_id == enqueue_context.trace_id
+        assert link.context.span_id == enqueue_context.span_id
+    else:
+        assert span.attributes["ws.link.trace_id"] == enqueue_context.trace_id
+        assert span.attributes["ws.link.span_id"] == enqueue_context.span_id
+

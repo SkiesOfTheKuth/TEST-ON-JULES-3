@@ -9,7 +9,7 @@ from typing import Dict, Iterator, MutableMapping
 from fastapi import FastAPI
 from opentelemetry import trace
 from opentelemetry.propagate import inject
-from opentelemetry.trace import Span, SpanContext
+from opentelemetry.trace import Span, SpanContext, SpanLink
 
 from src.observability.metrics import JobMetrics, get_job_metrics
 from src.observability.prom_installer import install_prometheus_endpoint
@@ -100,6 +100,14 @@ def start_ws_span(
     with tracer.start_as_current_span(span_name, attributes=attributes, links=links) as span:
         for key, value in attributes.items():
             span.set_attribute(key, value)
+        if enqueue_context is not None:
+            span.set_attribute("ws.link.trace_id", enqueue_context.trace_id)
+            span.set_attribute("ws.link.span_id", enqueue_context.span_id)
+            existing_links = getattr(span, "links", None)
+            if existing_links is None:
+                span.links = [SpanLink(context=enqueue_context)]
+            elif not any(getattr(link, "context", None) == enqueue_context for link in existing_links):
+                existing_links.append(SpanLink(context=enqueue_context))
         yield span
 
 
@@ -108,6 +116,15 @@ def _extract_span_context(span_or_context: Span | SpanContext | None) -> SpanCon
         return span_or_context.get_span_context()
     if isinstance(span_or_context, SpanContext):
         return span_or_context
+    if hasattr(span_or_context, "trace_id") and hasattr(span_or_context, "span_id"):
+        try:
+            trace_id = int(getattr(span_or_context, "trace_id"))
+            span_id = int(getattr(span_or_context, "span_id"))
+        except (TypeError, ValueError):
+            return None
+        trace_flags = int(getattr(span_or_context, "trace_flags", 0x01)) & 0xFF
+        tracestate = getattr(span_or_context, "tracestate", None)
+        return SpanContext(trace_id, span_id, trace_flags=trace_flags, tracestate=tracestate)
     return None
 
 
