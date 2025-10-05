@@ -6,6 +6,9 @@ import asyncio
 import time
 import datetime as dt
 import re
+import threading
+
+from typing import Any, Dict, Mapping, Optional, Coroutine
 from typing import Any, Dict, Mapping, Optional
 
 from celery import Celery
@@ -18,6 +21,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from prometheus_client import Counter, Gauge, Histogram, REGISTRY
 from prometheus_client import Counter, Gauge, Histogram
 
 from services.common.grpc import grpc
@@ -42,6 +46,95 @@ tracer = trace.get_tracer(__name__)
 settings = get_settings()
 
 _METRIC_NAMESPACE = settings.observability.metrics_namespace
+
+
+def _register_metric(name: str, factory):
+    full_name = f"{_METRIC_NAMESPACE}_{name}" if _METRIC_NAMESPACE else name
+    try:
+        return factory()
+    except ValueError:
+        existing = REGISTRY._names_to_collectors.get(full_name)  # type: ignore[attr-defined]
+        if existing is None:
+            raise
+        return existing
+
+
+_JOBS_ENQUEUED = _register_metric(
+    "jobs_enqueued_total",
+    lambda: Counter(
+        "jobs_enqueued_total",
+        "Total number of asynchronous calculator jobs submitted.",
+        labelnames=("queue",),
+        namespace=_METRIC_NAMESPACE,
+    ),
+)
+_JOBS_IN_PROGRESS = _register_metric(
+    "jobs_in_progress",
+    lambda: Gauge(
+        "jobs_in_progress",
+        "Number of calculator jobs currently being processed by workers.",
+        labelnames=("queue",),
+        namespace=_METRIC_NAMESPACE,
+    ),
+)
+_JOBS_FAILED = _register_metric(
+    "jobs_failed_total",
+    lambda: Counter(
+        "jobs_failed_total",
+        "Total number of calculator jobs that ultimately failed.",
+        labelnames=("queue", "reason"),
+        namespace=_METRIC_NAMESPACE,
+    ),
+)
+_QUEUE_DEPTH = _register_metric(
+    "job_queue_depth",
+    lambda: Gauge(
+        "job_queue_depth",
+        "Depth of the Redis-backed Celery queue.",
+        labelnames=("queue",),
+        namespace=_METRIC_NAMESPACE,
+    ),
+)
+_TASK_RUNTIME = _register_metric(
+    "job_task_runtime_seconds",
+    lambda: Histogram(
+        "job_task_runtime_seconds",
+        "Histogram of worker execution runtimes by outcome.",
+        labelnames=("queue", "status"),
+        namespace=_METRIC_NAMESPACE,
+        buckets=(
+            0.01,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1.0,
+            2.5,
+            5.0,
+            10.0,
+            30.0,
+        ),
+    ),
+)
+_QUEUE_WAIT = _register_metric(
+    "job_queue_wait_seconds",
+    lambda: Histogram(
+        "job_queue_wait_seconds",
+        "Time jobs spend waiting in the queue before worker execution.",
+        labelnames=("queue",),
+        namespace=_METRIC_NAMESPACE,
+        buckets=(
+            0.01,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1.0,
+            2.5,
+            5.0,
+            10.0,
+            30.0,
+        ),
 _JOBS_ENQUEUED = Counter(
     "jobs_enqueued_total",
     "Total number of asynchronous calculator jobs submitted.",
@@ -129,6 +222,32 @@ _sync_channel = None
 _sync_stub: Optional[evaluator_pb2_grpc.EvaluatorStub] = None
 
 
+def _run_coroutine(coro: Coroutine[Any, Any, Any]):
+    """Execute a coroutine regardless of surrounding event loop state."""
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: list[Any] = []
+    error: list[BaseException] = []
+
+    def runner() -> None:
+        try:
+            result.append(asyncio.run(coro))
+        except BaseException as exc:  # noqa: BLE001
+            error.append(exc)
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join()
+
+    if error:
+        raise error[0]
+    return result[0]
+
+
 def enqueue_job(job_id: str, *, trace_context: Optional[Dict[str, str]] = None) -> None:
     """Submit a job for asynchronous execution."""
 
@@ -156,7 +275,7 @@ def execute_job(self, job_id: str, trace_context: Optional[Dict[str, str]] = Non
     parent_context = extract(trace_context or {})
     token = attach(parent_context)
     try:
-        return asyncio.run(
+        return _run_coroutine(
             _execute_job(
                 job_id,
                 trace_headers=trace_context or {},
