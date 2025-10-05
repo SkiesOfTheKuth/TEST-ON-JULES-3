@@ -9,6 +9,7 @@ import re
 import threading
 
 from typing import Any, Dict, Mapping, Optional, Coroutine
+from typing import Any, Dict, Mapping, Optional
 
 from celery import Celery
 from celery.utils.log import get_task_logger
@@ -21,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from prometheus_client import Counter, Gauge, Histogram, REGISTRY
+from prometheus_client import Counter, Gauge, Histogram
 
 from services.common.grpc import grpc
 from services.protos import evaluator_pb2, evaluator_pb2_grpc
@@ -133,6 +135,64 @@ _QUEUE_WAIT = _register_metric(
             10.0,
             30.0,
         ),
+_JOBS_ENQUEUED = Counter(
+    "jobs_enqueued_total",
+    "Total number of asynchronous calculator jobs submitted.",
+    labelnames=("queue",),
+    namespace=_METRIC_NAMESPACE,
+)
+_JOBS_IN_PROGRESS = Gauge(
+    "jobs_in_progress",
+    "Number of calculator jobs currently being processed by workers.",
+    labelnames=("queue",),
+    namespace=_METRIC_NAMESPACE,
+)
+_JOBS_FAILED = Counter(
+    "jobs_failed_total",
+    "Total number of calculator jobs that ultimately failed.",
+    labelnames=("queue", "reason"),
+    namespace=_METRIC_NAMESPACE,
+)
+_QUEUE_DEPTH = Gauge(
+    "job_queue_depth",
+    "Depth of the Redis-backed Celery queue.",
+    labelnames=("queue",),
+    namespace=_METRIC_NAMESPACE,
+)
+_TASK_RUNTIME = Histogram(
+    "job_task_runtime_seconds",
+    "Histogram of worker execution runtimes by outcome.",
+    labelnames=("queue", "status"),
+    namespace=_METRIC_NAMESPACE,
+    buckets=(
+        0.01,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+    ),
+)
+_QUEUE_WAIT = Histogram(
+    "job_queue_wait_seconds",
+    "Time jobs spend waiting in the queue before worker execution.",
+    labelnames=("queue",),
+    namespace=_METRIC_NAMESPACE,
+    buckets=(
+        0.01,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
     ),
 )
 
