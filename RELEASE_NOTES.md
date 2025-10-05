@@ -11,6 +11,28 @@
 - Gateway: `/metrics` via the shared installer; enqueue header `x-enqueued-at-ms` for queue-wait tracing.
 - Worker: Celery signal instrumentation with bounded-cardinality labels and a standalone FastAPI metrics app.
 
+### Tracing
+
+- Added end-to-end OpenTelemetry spans for enqueue, poll, WebSocket, and worker execution phases with bounded-cardinality attributes (`job_id_short`, `queue`, `task`).
+- Propagated enqueue timestamps via `x-enqueued-at-ms` headers to compute `queue_wait_ms` and `worker_process_ms` inside worker spans for precise queue-to-execution correlation.
+- Emitted structured retry/failure events on execution spans alongside child spans for deserialize/compute/persist/publish lifecycles, verified with an in-memory exporter test.
+
+#### Tracing correlation & guards
+
+- Injected and extracted W3C Trace Context headers to guarantee enqueue→execute parentage while linking downstream WebSocket spans without introducing high-cardinality labels.
+- Clamped negative or missing `queue_wait_ms` values (clock skew) and logged once to avoid noisy metrics while keeping `worker_process_ms` bounded.
+- Hardened span attributes to exclude full job identifiers or tenant data, preserving `job_id_short` only and capturing retry/failure events with structured error payloads.
+- Enforced exact span names with a single worker execute span per task to prevent double instrumentation and metric drift.
+- Documented guardrails for missing enqueue headers (attribute omitted) and negative queue waits (clamped to zero).
+- Linked WebSocket spans back to enqueue contexts via `SpanLink` while keeping attributes PII-free.
+- Added regression tests enforcing correlation and guardrails (parent/child linkage, queue wait omissions/clamps, WebSocket links, and single execute spans).
+
+##### Final regression locks
+
+- Added targeted tests to ensure missing enqueue headers omit `queue_wait_ms`, future-dated headers clamp to `0`, and nested instrumentation paths still surface a single `jobs.execute` span.
+- Verified metrics guards that `jobs_in_progress` increments/decrements exactly once per task, runtime histograms record a single observation, and success paths leave failure counters unchanged.
+- Final WS & metrics locks: WebSocket spans now assert a single enqueue link with bounded attributes, histogram/gauge accounting is explicitly scraped, and a Prometheus installer sanity test guards against duplicate collectors.
+
 ## phase2-alpha.1
 
 ### Highlights

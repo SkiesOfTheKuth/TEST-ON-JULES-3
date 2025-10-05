@@ -21,9 +21,12 @@ except Exception:  # pragma: no cover - minimal fallback
             return self
 
 PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
-_FALLBACK_BODY = b"# HELP exporter_placeholder_info Exporter bootstrap placeholder\n" \
-    b"# TYPE exporter_placeholder_info gauge\n" \
-    b"# no_metrics_yet 1\n"
+_FALLBACK_METRICS_TEXT = (
+    "# HELP exporter_placeholder_info Exporter bootstrap placeholder\n"
+    "# TYPE exporter_placeholder_info gauge\n"
+    "exporter_placeholder_info 1\n"
+)
+_FALLBACK_BODY = _FALLBACK_METRICS_TEXT.encode("utf-8")
 
 __all__ = ["install_prometheus_endpoint", "PROMETHEUS_CONTENT_TYPE"]
 

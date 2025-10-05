@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.protos import evaluator_pb2, evaluator_pb2_grpc
 
+from src.common.compat import anext_async
 from src.gateway.instrumentation import (
     start_enqueue_span,
     start_job_status_span,
@@ -488,7 +489,7 @@ async def _authenticate_websocket(websocket: WebSocket) -> AuthenticatedAPIKey |
 
     session_gen = get_session()
     try:
-        session = await anext(session_gen)
+        session = await anext_async(session_gen)
     except StopAsyncIteration:  # pragma: no cover - defensive
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
         return None
@@ -513,7 +514,7 @@ async def _load_job_payload(job_id: str) -> Dict[str, Any] | None:
 
     session_gen = get_session()
     try:
-        session = await anext(session_gen)
+        session = await anext_async(session_gen)
     except StopAsyncIteration:  # pragma: no cover - defensive
         return None
 

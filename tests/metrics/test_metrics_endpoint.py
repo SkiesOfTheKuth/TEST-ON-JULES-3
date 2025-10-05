@@ -60,7 +60,7 @@ def test_install_prometheus_endpoint_is_idempotent_and_serves_fallback() -> None
     body_lines = (getattr(response, "body", b"") or b"").decode("utf-8").splitlines()
     assert body_lines[0].startswith("# HELP")
     assert body_lines[1].startswith("# TYPE")
-    assert "# no_metrics_yet 1" in "\n".join(body_lines)
+    assert "exporter_placeholder_info 1" in "\n".join(body_lines)
 
     assert _route_count(app, "/metrics") == 1
 
