@@ -35,6 +35,10 @@ class _RecordingRedis:
         self.storage.pop(key, None)
         self.events.append(("delete", key, None))
 
+    async def llen(self, key: str) -> int:
+        self.events.append(("llen", key, None))
+        return 0
+
     async def close(self) -> None:  # pragma: no cover - provided for API parity
         return None
 
