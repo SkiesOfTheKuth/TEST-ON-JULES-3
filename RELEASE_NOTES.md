@@ -1,5 +1,16 @@
 # Release Notes
 
+## Unreleased
+
+### Observability
+
+- Added reusable helpers to expose Prometheus `/metrics` endpoints across gateway and worker processes, ensuring idempotent registration backed by the shared registry.
+- Wired Celery worker signal hooks for tracing spans, queue wait histograms, and failure counters; provided a lightweight FastAPI metrics app for workers.
+- Extended tests covering Prometheus exposure, queue instrumentation, and Celery signal lifecycles to guard the observability baseline.
+- NEW: `install_prometheus_endpoint` for any ASGI app; idempotent, shared registry.
+- Gateway: `/metrics` via the shared installer; enqueue header `x-enqueued-at-ms` for queue-wait tracing.
+- Worker: Celery signal instrumentation with bounded-cardinality labels and a standalone FastAPI metrics app.
+
 ## phase2-alpha.1
 
 ### Highlights

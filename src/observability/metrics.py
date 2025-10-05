@@ -25,7 +25,15 @@ class JobMetrics:
 _METRICS_BY_NAMESPACE: Dict[Tuple[Optional[str]], JobMetrics] = {}
 
 
-def _get_or_register(metric_cls, name: str, documentation: str, *, labelnames=(), namespace: str | None = None, **kwargs):
+def _get_or_register(
+    metric_cls,
+    name: str,
+    documentation: str,
+    *,
+    labelnames=(),
+    namespace: str | None = None,
+    **kwargs,
+):
     """Return an existing collector or create a new one safely."""
 
     full_name = f"{namespace}_{name}" if namespace else name

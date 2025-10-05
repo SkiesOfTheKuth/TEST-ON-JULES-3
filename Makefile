@@ -24,3 +24,11 @@ compose-up:
 
 compose-down:
 	docker compose -f docker-compose.phase1.yml down
+
+.PHONY: quick-check
+quick-check:
+	@python scripts/verify_observability.py
+
+.PHONY: quick-tests
+quick-tests:
+	@poetry run pytest -q tests/metrics/test_metrics_endpoint.py tests/metrics/test_worker_signals.py
