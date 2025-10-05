@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+import math
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Callable, Iterable, Iterator, Mapping, Optional, Tuple, Type
 from weakref import WeakKeyDictionary
 
@@ -42,7 +45,8 @@ except ImportError:  # pragma: no cover - fallback for test doubles
     signals = _SignalNamespace()
 from fastapi import FastAPI
 from opentelemetry import trace
-from opentelemetry.trace import Span, Status, StatusCode
+from opentelemetry.propagate import extract
+from opentelemetry.trace import Span, SpanContext, Status, StatusCode
 
 from src.gateway.instrumentation import job_id_short
 from src.observability.metrics import JobMetrics, get_job_metrics
@@ -58,12 +62,15 @@ __all__ = [
 
 
 tracer = trace.get_tracer("worker.jobs")
+logger = logging.getLogger(__name__)
 _REQUEST_CTX_ATTR = "_observability_ctx"
 _REQUEST_SPAN_ATTR = "_observability_span"
 _INSTRUMENTED_WORKERS: "WeakKeyDictionary[Celery, bool]" = WeakKeyDictionary()
 _METRICS_LABELS_ATTR = "_observability_metrics_labels"
 _METRICS_START_ATTR = "_observability_metrics_start"
 _METRICS_GAUGE_ATTR = "_observability_metrics_gauge_active"
+_CLOCK_SKEW_LOGGED = False
+_EXECUTE_DEPTH: ContextVar[int] = ContextVar("worker_jobs_execute_depth", default=0)
 
 
 def get_worker_metrics(namespace: str | None = None) -> JobMetrics:
@@ -167,6 +174,10 @@ def setup_worker_signals(
                 pass
             span.set_status(Status(StatusCode.ERROR))
             span.set_attribute("outcome", "failed")
+            span.add_event(
+                "job.failed",
+                {"exception.type": type(exception).__name__ if exception else "Unknown"},
+            )
 
         labels = _decrement_in_progress(request)
         if labels is None:
@@ -185,6 +196,10 @@ def setup_worker_signals(
                 pass
         span.set_attribute("outcome", "retry")
         span.set_status(Status(StatusCode.ERROR))
+        span.add_event(
+            "job.retry",
+            {"exception.type": type(reason).__name__ if reason else "Unknown"},
+        )
         _decrement_in_progress(request)
 
     @signals.task_postrun.connect(sender=app)  # pragma: no cover - Celery wiring
@@ -227,7 +242,7 @@ def setup_worker_signals(
     _INSTRUMENTED_WORKERS[app] = True
 
 
-def compute_queue_wait_ms(headers: Mapping[str, str] | None) -> float | None:
+def compute_queue_wait_ms(headers: Mapping[str, str] | None) -> int | None:
     """Derive queue wait milliseconds from Celery headers."""
 
     if not headers:
@@ -236,12 +251,20 @@ def compute_queue_wait_ms(headers: Mapping[str, str] | None) -> float | None:
     if raw is None:
         return None
     try:
-        enqueued_ms = float(raw)
+        enqueued_ms = int(float(raw))
     except (TypeError, ValueError):
         return None
-    now_ms = time.time() * 1000.0
-    wait = max(0.0, now_ms - enqueued_ms)
-    return wait
+    now_ms = int(time.time() * 1000)
+    wait = now_ms - enqueued_ms
+    if wait < 0:
+        global _CLOCK_SKEW_LOGGED
+        if not _CLOCK_SKEW_LOGGED:
+            logger.debug(
+                "Detected negative queue wait due to clock skew; clamping to zero."
+            )
+            _CLOCK_SKEW_LOGGED = True
+        wait = 0
+    return int(wait)
 
 
 @contextmanager
@@ -257,56 +280,96 @@ def worker_task_span(
 ) -> Iterator[Span]:
     """Context manager capturing worker execution spans and metrics."""
 
-    queue_wait_ms = compute_queue_wait_ms(headers)
-    attributes = {
-        "queue": queue,
-        "task": task,
-        "job_id": job_id_short(job_id),
-    }
-    if queue_wait_ms is not None:
-        attributes["queue_wait_ms"] = queue_wait_ms
-
-    exception_types: Tuple[Type[BaseException], ...] = tuple(retry_exception_types)
-    start_time = time.perf_counter()
-    outcome = "success"
-
-    metrics_enabled = manage_metrics and metrics is not None
-    if metrics_enabled:
-        metrics.jobs_in_progress.labels(queue=queue, task=task).inc()
-
-    with tracer.start_as_current_span("jobs.execute", attributes=attributes) as span:
-        for key, value in attributes.items():
-            span.set_attribute(key, value)
-        span.add_event("job.id", {"job_id": job_id})
-        span.set_attribute("component", "worker")
-        if metrics_enabled and queue_wait_ms is not None:
-            metrics.job_wait_time_seconds.labels(queue=queue).observe(queue_wait_ms / 1000.0)
+    depth = _EXECUTE_DEPTH.get()
+    if depth > 0:
+        token = _EXECUTE_DEPTH.set(depth + 1)
         try:
-            yield span
-        except exception_types as exc:  # type: ignore[arg-type]
-            outcome = "retry"
-            span.record_exception(exc)
-            span.set_status(Status(StatusCode.ERROR))
-            span.set_attribute("outcome", outcome)
-            raise
-        except Exception as exc:  # noqa: BLE001
-            outcome = "failed"
-            span.record_exception(exc)
-            span.set_status(Status(StatusCode.ERROR))
-            span.set_attribute("outcome", outcome)
-            raise
-        else:
-            explicit_outcome = getattr(span, "attributes", {}).get("outcome")
-            outcome = str(explicit_outcome) if explicit_outcome else "success"
-            if not explicit_outcome:
-                span.set_attribute("outcome", outcome)
-            span.set_status(Status(StatusCode.OK) if outcome == "success" else Status(StatusCode.ERROR))
+            yield trace.get_current_span()
         finally:
-            worker_process_ms = (time.perf_counter() - start_time) * 1000.0
-            span.set_attribute("worker_process_ms", worker_process_ms)
-            if metrics_enabled:
-                metrics.celery_task_runtime_seconds.labels(task=task).observe(worker_process_ms / 1000.0)
-                metrics.jobs_in_progress.labels(queue=queue, task=task).dec()
-                final_outcome = getattr(span, "attributes", {}).get("outcome", outcome)
-                if final_outcome == "failed":
-                    metrics.jobs_failed.labels(queue=queue, task=task).inc()
+            _EXECUTE_DEPTH.reset(token)
+        return
+
+    token = _EXECUTE_DEPTH.set(1)
+    try:
+        queue_wait_ms = compute_queue_wait_ms(headers)
+        attributes = {
+            "queue": queue,
+            "task": task,
+            "job_id_short": job_id_short(job_id),
+        }
+        if queue_wait_ms is not None:
+            attributes["queue_wait_ms"] = queue_wait_ms
+
+        exception_types: Tuple[Type[BaseException], ...] = tuple(retry_exception_types)
+        start_time = time.perf_counter()
+        outcome = "success"
+
+        parent_context: SpanContext | None = None
+        if headers:
+            extracted = extract(dict(headers))
+            if isinstance(extracted, SpanContext) and extracted.is_valid:
+                parent_context = extracted
+
+        metrics_enabled = manage_metrics and metrics is not None
+        if metrics_enabled:
+            metrics.jobs_in_progress.labels(queue=queue, task=task).inc()
+
+        with tracer.start_as_current_span(
+            "jobs.execute",
+            attributes=attributes,
+            parent=parent_context,
+        ) as span:
+            for key, value in attributes.items():
+                span.set_attribute(key, value)
+            if metrics_enabled and queue_wait_ms is not None:
+                metrics.job_wait_time_seconds.labels(queue=queue).observe(queue_wait_ms / 1000.0)
+            try:
+                yield span
+            except exception_types as exc:  # type: ignore[arg-type]
+                outcome = "retry"
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR))
+                span.set_attribute("outcome", outcome)
+                span.add_event(
+                    "job.retry",
+                    {
+                        "error.type": type(exc).__name__,
+                        "error.message": str(exc),
+                    },
+                )
+                raise
+            except Exception as exc:  # noqa: BLE001
+                outcome = "failed"
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR))
+                span.set_attribute("outcome", outcome)
+                span.add_event(
+                    "job.failed",
+                    {
+                        "error.type": type(exc).__name__,
+                        "error.message": str(exc),
+                    },
+                )
+                raise
+            else:
+                explicit_outcome = getattr(span, "attributes", {}).get("outcome")
+                outcome = str(explicit_outcome) if explicit_outcome else "success"
+                if not explicit_outcome:
+                    span.set_attribute("outcome", outcome)
+                span.set_status(
+                    Status(StatusCode.OK) if outcome == "success" else Status(StatusCode.ERROR)
+                )
+            finally:
+                elapsed_ms = max(0.0, (time.perf_counter() - start_time) * 1000.0)
+                worker_process_ms = max(0, int(math.ceil(elapsed_ms)))
+                span.set_attribute("worker_process_ms", worker_process_ms)
+                if metrics_enabled:
+                    metrics.celery_task_runtime_seconds.labels(task=task).observe(
+                        worker_process_ms / 1000.0
+                    )
+                    metrics.jobs_in_progress.labels(queue=queue, task=task).dec()
+                    final_outcome = getattr(span, "attributes", {}).get("outcome", outcome)
+                    if final_outcome == "failed":
+                        metrics.jobs_failed.labels(queue=queue, task=task).inc()
+    finally:
+        _EXECUTE_DEPTH.reset(token)
