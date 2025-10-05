@@ -1,105 +1,159 @@
-CALCULATOR PLATFORM â€“ PHASE 1 USAGE GUIDE
-=============================================
+CALCULATOR PLATFORM - PHASE 2 USAGE GUIDE
+========================================
 
 Overview
 --------
-The calculator now runs as a hardened, multi-service platform:
-- `gateway` FastAPI service handling REST/WebSocket entry points, rate limiting, and auditing.
-- `safe-evaluator` sandboxed microservice running expressions via a subprocess guard.
-- Shared infrastructure: Redis for rate limiting/cache, Postgres for API keys and audit logs, and an observability stack (Prometheus, Tempo, Loki, Grafana).
+The calculator now operates as a production-ready, distributed platform:
+- **Gateway** – FastAPI service with synchronous `/calculate` and asynchronous `/jobs` endpoints, per-tenant policy engine, WebSocket notifications, and Celery orchestration.
+- **Safe Evaluator** – gRPC microservice performing sandboxed evaluations with strict allowlists, complexity budgets, and telemetry.
+- **Workers** – Standard, heavy, and GPU Celery lanes consuming Redis queues and publishing live status updates.
+- **Infrastructure** – Postgres (API keys, jobs, policies), Redis (broker, cache, policy store), Grafana/Prometheus/Tempo/Loki for full observability.
 
-Quick Start with Docker Compose
--------------------------------
-1. Install Docker Desktop (or Docker Engine) and ensure it is running.
-2. Copy `.env.development` to `.env` if you want to override defaults.
-3. From the repository root run:
-   ````bash
-   make compose-up
-   ````
-4. The following ports will be exposed by default:
-   - Gateway API: http://localhost:8080
-   - Grafana: http://localhost:3000 (admin / grafana)
-   - Postgres: localhost:5432 (calculator / calculator)
-5. Seed an API key by opening a shell in the gateway container and running the Alembic seeding script (see `OPERATIONS.md`).
-6. Send a request with the API key header:
-   ````bash
-   curl -H "X-Api-Key: <your-key>"         -H "Content-Type: application/json"         -d '{"expression": "add(1, 2)"}'         http://localhost:8080/calculate-sync
-   ````
-7. To stop the stack run:
-   ````bash
-   make compose-down
-   ````
-
-Local Development (without Docker)
-----------------------------------
-1. Create a virtual environment and install dependencies:
-   ````bash
-   python -m venv .venv
-   source .venv/bin/activate
-   make bootstrap
-   ````
-2. Start Postgres and Redis locally (Docker compose is the easiest way).
-3. Apply database migrations:
-   ````bash
-   cd services/gateway
-   alembic upgrade head
-   ````
-4. Run the evaluator service:
-   ````bash
-   make run-evaluator
-   ````
-5. In another terminal run the gateway:
-   ````bash
-   make run-gateway
-   ````
+Quick Start (Docker Compose)
+---------------------------
+1. Ensure Docker Desktop/Engine is running.
+2. From the repository root execute:
+   ```bash
+   make compose-phase2-up
+   ```
+3. Default endpoints:
+   - Gateway API: <http://localhost:8080>
+   - Grafana: <http://localhost:3000> (`admin` / `grafana`)
+   - Postgres: `localhost:5432` (`calculator` / `calculator`)
+   - Redis: `localhost:6379`
+4. Seed an API key (idempotent):
+   ```bash
+   poetry -C services/gateway run python -m app.scripts.seed_api_key --api-key local-dev-key --owner "Local Dev" --force
+   ```
+5. Submit a synchronous calculation:
+   ```bash
+   curl -X POST http://localhost:8080/calculate \
+     -H "X-Api-Key: local-dev-key" \
+     -H "Content-Type: application/json" \
+     -d '{"expression": "add(4, multiply(3, 2))"}'
+   ```
+6. Tear everything down (including volumes):
+   ```bash
+   make compose-phase2-down
+   ```
 
 Asynchronous Jobs
 -----------------
-Phase 2 adds an async job API backed by Celery and Redis. Use it for heavyweight expressions or batch workloads.
-
-1. Submit a job:
-   ````bash
+1. With the stack running, enqueue a standard job:
+   ```bash
    curl -X POST http://localhost:8080/jobs \
-     -H "X-Api-Key: <your-key>" \
+     -H "X-Api-Key: local-dev-key" \
      -H "Content-Type: application/json" \
      -d '{
            "input_expression": "pow(2, 12) + sqrt(16)",
            "context": {"scale": 3},
            "priority": 1,
-           "tags": ["demo", "retryable"]
+           "tags": ["demo"]
          }'
-   ````
-   The response returns the job metadata, including polling links and WebSocket URI (`/ws/jobs/<id>`).
-2. Poll for completion:
-   ````bash
-   curl -H "X-Api-Key: <your-key>" http://localhost:8080/jobs/<job-id>
-   ````
-   Successful jobs return the cached payload; failures include the error string recorded in Postgres and Prometheus (`calculator_gateway_jobs_failed_total`).
-3. Optional: stream updates over WebSockets (requires `wscat` or similar):
-   ````bash
-   npx wscat -c ws://localhost:8080/ws/jobs/<job-id> -H "X-Api-Key: <your-key>"
-   ````
-4. Explore metrics and dashboards:
-   - `curl -s http://localhost:8080/metrics | grep calculator_gateway_job`
-   - Grafana â†’ `Gateway Overview` â†’ Async panels for throughput, success rate, and wait time.
+   ```
+   The response includes `id`, queue assignment, and WebSocket link.
+2. Route to heavy math by adding a `heavy` tag or long-running expression:
+   ```bash
+   curl -X POST http://localhost:8080/jobs \
+     -H "X-Api-Key: local-dev-key" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "input_expression": "integrate(sin(x) * exp(-x**2), x)",
+           "tags": ["heavy"]
+         }'
+   ```
+3. Hint GPU lane with a `gpu` tag (requires tenant policy allowing GPU):
+   ```bash
+   curl -X POST http://localhost:8080/jobs \
+     -H "X-Api-Key: local-dev-key" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "input_expression": "sin(x) + cos(x)",
+           "tags": ["gpu"],
+           "context": {"x": 1.1}
+         }'
+   ```
+4. Poll for completion:
+   ```bash
+   curl -H "X-Api-Key: local-dev-key" http://localhost:8080/jobs/<job-id>
+   ```
+5. Stream status updates via WebSocket (requires `npm i -g wscat`):
+   ```bash
+   wscat -c ws://localhost:8080/ws/jobs/<job-id> -H "X-Api-Key: local-dev-key"
+   ```
 
-Testing
--------
-Execute unit tests from the repository root:
-````bash
-make test
-````
+Integration Testing
+-------------------
+- Bring up the full validation stack and run integration tests:
+  ```bash
+  make integration
+  ```
+  or, with services already running:
+  ```bash
+  poetry -C services/gateway run pytest tests/integration -m integration
+  ```
+- Coverage highlights:
+  - Queue routing across standard, heavy, and GPU lanes.
+  - Tenant policy allow/deny flows and cache invalidation.
+  - WebSocket lifecycle streaming.
+  - Failure propagation (sandbox validation errors) and metrics assertions.
+  - Autoscaling decision helper sanity checks.
 
-API Security Highlights
------------------------
-- All requests require an `X-Api-Key` header referencing a hashed record in Postgres.
-- Redis-based sliding window throttles requests per key and per client IP.
-- Expressions are validated via AST inspection before hitting the sandbox.
-- Successful evaluations may be cached for deterministic expressions.
+Load Testing
+------------
+- Locust script (`tests/load/locustfile.py`) drives job submission/polling with enforced thresholds:
+  ```bash
+  API_KEY=local-dev-key make load-test
+  ```
+- Tunable environment variables (defaults in parentheses):
+  - `LOCUST_MAX_P95_MS` (`750`) – failure if p95 latency exceeds this value.
+  - `LOCUST_MIN_RPS` (`5`) – failure if average throughput drops below this rate.
+  - `LOCUST_MAX_FAILURE_RATIO` (`0.05`) – failure if error ratio exceeds this cap.
 
-Need More?
-----------
-- `docs/ARCHITECTURE.md` â€“ component topology and call flows.
-- `docs/OPERATIONS.md` â€“ running migrations, rotating keys, observability tips.
-- `docs/SECURITY.md` â€“ threat model and controls.
-- ADRs in `docs/ADRS/` record key design decisions.
+Observability
+-------------
+- Grafana: `http://localhost:3000` (admin / grafana) hosts **Gateway Overview**, **Phase 2 Queue Lanes**, and **Worker Health** dashboards covering request health, per-lane depth/autoscale events, and worker utilisation/failure trends.
+- Metrics: `curl -s http://localhost:8080/metrics` to inspect counters (`calculator_gateway_jobs_enqueued_total`, `calculator_gateway_policy_violations_total`, etc.) and gauges (`calculator_gateway_job_queue_depth`, `calculator_gateway_worker_cpu_percent`).
+- Traces: Tempo spans include `calculator.queue`, `calculator.tenant`, and `calculator.policy_outcome`; filter by `job.id` to debug latency or policy decisions.
+- Logs: `docker compose -f docker-compose.phase2.yml logs gateway` streams structured JSON (request IDs, queue decisions, tenant metadata).
+- Runbooks: see `docs/OPERATIONS.md` for Celery worker lifecycle, Redis outage recovery, policy tuning, and dashboard interpretation guidance.
+
+Autoscaling & SLOs
+------------------
+- Dry-run scale decisions from the repo root:
+  ```bash
+  python scripts/autoscale_workers.py --queue-depth 90 --active-workers 4 --p95-wait 6 --worker-cpu 82
+  ```
+- Add `--apply` to grow/shrink Celery pools directly (Celery must be reachable); use `--stdin` to feed JSON snapshots exported from Prometheus.
+- Default thresholds (`services/gateway/app/config.py > AutoscaleSettings`): scale up at >=75% queue depth, >5s p95 wait, or >85% CPU; scale down once backlog is <=15% and latency/CPU halve; cooldown 180s with 30s drain timeout.
+- Grafana `Phase 2 Queue Lanes` dashboard visualises per-lane depth, throughput, and `calculator_gateway_autoscale_events_total`.
+
+Observability
+--------------
+- Grafana: `http://localhost:3000` (admin / grafana) ships three key dashboards:
+  - **Gateway Overview** for request health, policy decision rates, and error budgets.
+  - **Phase 2 Queue Lanes** for per-lane depth, enqueue throughput, autoscale events, and queue wait histograms.
+  - **Worker Health** for Celery heartbeats, job failure reasons, and utilization trends.
+- Tempo traces include `calculator.queue`, `calculator.tenant`, and `calculator.policy_outcome` attributes—filter by `job.id` to debug latency.
+- Runbooks: see `docs/OPERATIONS.md` for Celery worker lifecycle, Redis outage recovery, policy engine tuning, and dashboard interpretation guidance.
+
+Resilience Testing
+------------------
+- Execute the targeted resilience suite (skips automatically if `aiosqlite` is absent):
+  ```bash
+  python -m pytest services/gateway/tests/test_resilience.py -vv
+  ```
+  Scenarios cover slow workers, Redis outages, evaluator resource exhaustion retries, and worker crashes.
+- Autoscale decision unit tests live in `services/gateway/tests/test_autoscale.py`.
+
+Troubleshooting
+---------------
+- **403 policy_violation** – verify tenant policy (`tenant_policies` table) permits the requested queue/feature and clear the Redis cache key `policy:<tenant>`.
+- **503 queue full** – adjust `GATEWAY_JOB__MAX_QUEUE_SIZE`or scale workers; observe `calculator_gateway_job_queue_depth` before re-enqueueing.
+- **Evaluator errors** – check safe evaluator logs, ensure allowlist and complexity thresholds cover the expression, or adjust policy `max_runtime_ms` for long-running jobs.
+
+Documentation & Releases
+-------------------------
+- Update this file, `docs/OPERATIONS.md`, and `docs/CHANGE_LOG.md` whenever behavior, endpoints, policies, or runbooks change.
+- CI enforces changelog updates through `scripts/ensure_changelog_updated.py`. Run it locally before submitting a pull request if unsure.
+- Include Grafana exports under `observability/grafana/dashboards/` for new panels or alerts.

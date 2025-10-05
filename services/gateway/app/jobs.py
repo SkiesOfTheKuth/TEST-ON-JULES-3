@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import uuid
 import json
+import uuid
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional
 
 from redis.asyncio import Redis
@@ -13,12 +14,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .cache import JobCache
 from .config import GatewaySettings
 from .models import Job
-from .schemas import JobResultResponse, JobSubmissionRequest
+from .schemas import JobPolicyStatus, JobResultResponse, JobSubmissionRequest
 
 STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
 STATUS_SUCCEEDED = "succeeded"
 STATUS_FAILED = "failed"
+
+
+@dataclass(slots=True)
+class JobCreationMetadata:
+    tenant: str
+    queue_name: str
+    task_type: str
+    policy_snapshot: Dict[str, Any]
+    policy_violations: list[str]
+    policy_enforced: bool
+    estimated_runtime_ms: Optional[int]
+    assigned_priority: Optional[int] = None
+    requested_priority: Optional[int] = None
 
 
 def normalize_priority(priority: int, *, levels: int) -> int:
@@ -39,16 +53,33 @@ async def create_job(
     submission: JobSubmissionRequest,
     *,
     settings: GatewaySettings,
+    metadata: JobCreationMetadata,
 ) -> Job:
+    requested_priority = (
+        metadata.requested_priority if metadata.requested_priority is not None else submission.priority
+    )
+    normalized_priority = normalize_priority(
+        metadata.assigned_priority if metadata.assigned_priority is not None else submission.priority,
+        levels=settings.job.priority_levels,
+    )
+
     job = Job(
         id=str(uuid.uuid4()),
+        tenant=metadata.tenant,
         status=STATUS_QUEUED,
         input_expression=submission.input_expression,
         context=submission.context,
         result_payload=None,
         error=None,
-        priority=normalize_priority(submission.priority, levels=settings.job.priority_levels),
+        requested_priority=requested_priority,
+        priority=normalized_priority,
         tags=_deduplicate_tags(submission.tags),
+        queue_name=metadata.queue_name,
+        task_type=metadata.task_type,
+        policy_snapshot=dict(metadata.policy_snapshot),
+        policy_violations=list(metadata.policy_violations),
+        policy_enforced=bool(metadata.policy_enforced),
+        estimated_runtime_ms=metadata.estimated_runtime_ms,
     )
     session.add(job)
     await session.commit()
@@ -63,10 +94,29 @@ async def fetch_job(session: AsyncSession, job_id: str) -> Optional[Job]:
 
 
 def serialize_job(job: Job, settings: GatewaySettings, *, include_links: bool = True) -> Dict[str, Any]:
-    response = JobResultResponse.model_validate(job, from_attributes=True)
-    if include_links:
-        response.links = build_job_links(settings, job.id)
-    return response.model_dump(mode="json")
+    payload = JobResultResponse(
+        id=job.id,
+        tenant=job.tenant,
+        status=job.status,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        priority=job.priority,
+        requested_priority=job.requested_priority,
+        tags=job.tags,
+        queue_name=job.queue_name,
+        task_type=job.task_type,
+        estimated_runtime_ms=job.estimated_runtime_ms,
+        policy=JobPolicyStatus(
+            enforced=job.policy_enforced,
+            violations=job.policy_violations,
+            snapshot=job.policy_snapshot,
+        ),
+        links=build_job_links(settings, job.id) if include_links else {},
+        result_payload=job.result_payload,
+        error=job.error,
+    )
+    return payload.model_dump(mode="json")
 
 
 def build_job_links(settings: GatewaySettings, job_id: str) -> Dict[str, str]:
@@ -116,4 +166,5 @@ def _deduplicate_tags(tags: Iterable[str]) -> list[str]:
         if len(normalized) >= 32:
             break
     return normalized
+
 

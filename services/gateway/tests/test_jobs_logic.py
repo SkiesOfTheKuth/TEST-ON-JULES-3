@@ -95,8 +95,19 @@ async def test_create_job_persists_and_caches(engine, test_settings: GatewaySett
             priority=5,
             tags=["Alpha", "alpha", "beta"],
         )
+        metadata = jobs.JobCreationMetadata(
+            tenant="test-tenant",
+            queue_name=test_settings.job.queue_name,
+            task_type="standard",
+            policy_snapshot={},
+            policy_violations=[],
+            policy_enforced=False,
+            estimated_runtime_ms=None,
+            assigned_priority=None,
+            requested_priority=submission.priority,
+        )
 
-        job = await jobs.create_job(session, submission, settings=test_settings)
+        job = await jobs.create_job(session, submission, settings=test_settings, metadata=metadata)
         assert job.status == jobs.STATUS_QUEUED
         assert job.priority == 3
         assert job.tags == ["Alpha", "beta"]
@@ -119,10 +130,23 @@ async def test_celery_job_lifecycle_in_eager_mode(
 ) -> None:
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as session:
+        submission = JobSubmissionRequest(input_expression="40 + 2", context={}, priority=0, tags=[])
+        metadata = jobs.JobCreationMetadata(
+            tenant="test-tenant",
+            queue_name=test_settings.job.queue_name,
+            task_type="standard",
+            policy_snapshot={},
+            policy_violations=[],
+            policy_enforced=False,
+            estimated_runtime_ms=None,
+            assigned_priority=None,
+            requested_priority=submission.priority,
+        )
         job = await jobs.create_job(
             session,
-            JobSubmissionRequest(input_expression="40 + 2", context={}, priority=0, tags=[]),
+            submission,
             settings=test_settings,
+            metadata=metadata,
         )
 
     monkeypatch.setattr(task_queue, "settings", test_settings)
@@ -150,7 +174,10 @@ async def test_celery_job_lifecycle_in_eager_mode(
     task_queue.celery_app.conf.task_eager_propagates = True
 
     try:
-        result: EagerResult = task_queue.execute_job.apply(args=[job.id], kwargs={"trace_context": {}})
+        result: EagerResult = task_queue.execute_job.apply(
+            args=[job.id],
+            kwargs={"queue_name": metadata.queue_name, "trace_context": {}},
+        )
         payload = result.get(timeout=5)
     finally:
         task_queue.celery_app.conf.task_always_eager = previous_always_eager
@@ -173,3 +200,40 @@ async def test_celery_job_lifecycle_in_eager_mode(
 
     assert result_payload["value"] == 42.0
 
+
+
+
+def test_enqueue_job_applies_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+    records: dict[str, object] = {}
+
+    class _FakeSignature:
+        def __init__(self, args, kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+        def apply_async(self, *, queue: str, headers: dict[str, str], **kwargs) -> None:
+            records["queue"] = queue
+            records["headers"] = headers
+            records["args"] = self.args
+            records["kwargs"] = self.kwargs
+
+    class _FakeTask:
+        def s(self, *args, **kwargs):
+            records["s_args"] = args
+            records["s_kwargs"] = kwargs
+            return _FakeSignature(args, kwargs)
+
+    monkeypatch.setattr(task_queue, "execute_job", _FakeTask(), raising=False)
+    metric_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(task_queue, "_record_job_enqueued", lambda queue: metric_calls.append(("enqueued", queue)))
+    monkeypatch.setattr(task_queue, "_schedule_queue_depth_refresh", lambda queue: metric_calls.append(("refresh", queue)))
+
+    trace_headers = {"traceparent": "00-abc"}
+    task_queue.enqueue_job("job-123", trace_context=trace_headers)
+
+    default_queue = task_queue.settings.job.queue_name
+    assert records["s_args"] == ("job-123",)
+    assert records["s_kwargs"] == {"queue_name": default_queue, "trace_context": trace_headers}
+    assert records["queue"] == default_queue
+    assert records["headers"] == trace_headers
+    assert metric_calls == [("enqueued", default_queue), ("refresh", default_queue)], "Metrics hooks should be invoked"

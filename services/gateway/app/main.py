@@ -29,11 +29,17 @@ from .evaluator_client import build_grpc_metadata, create_async_channel
 from .instrumentation import (
     configure_logging,
     configure_tracing,
+    get_policy_context,
     instrument_app,
+    record_policy_decision,
     record_rate_limit_rejection,
+    set_policy_context,
+    set_queue_context,
+    set_tenant_context,
 )
 from .models import RequestAudit
 from .quota import QuotaConfig, QuotaExceededError, consume_quota
+from .policy import evaluate_job_policy
 from .rate_limit import RateLimiter
 from .schemas import (
     CalculationResponse,
@@ -128,6 +134,25 @@ async def calculate_sync(
     api_key: AuthenticatedAPIKey = Depends(require_api_key),
     session: AsyncSession = Depends(get_session),
 ) -> CalculationResponse:
+    tenant = api_key.record.owner
+    set_tenant_context(tenant)
+    set_queue_context("sync")
+    set_policy_context("pending")
+    root_span = trace.get_current_span()
+    if root_span and root_span.is_recording():
+        root_span.set_attribute("calculator.tenant", tenant)
+        root_span.set_attribute("calculator.queue", "sync")
+        root_span.set_attribute("calculator.policy_outcome", "pending")
+
+    def _record_policy(decision: str, rule: str) -> None:
+        record_policy_decision(tenant=tenant, rule=rule, decision=decision)
+        set_policy_context(decision)
+        current = trace.get_current_span()
+        if current and current.is_recording():
+            current.set_attribute("calculator.policy_outcome", decision)
+        if root_span and root_span.is_recording():
+            root_span.set_attribute("calculator.policy_outcome", decision)
+
     client_ip = request.client.host if request.client else "unknown"
     api_key_id = api_key.record.id
     rate_limiter_key: RateLimiter = app.state.rate_limit_key
@@ -136,6 +161,7 @@ async def calculate_sync(
 
     if not await rate_limiter_key.allow(str(api_key_id)):
         record_rate_limit_rejection("api_key")
+        _record_policy("deny", "api_rate_limit")
         await _persist_audit(
             api_key_id,
             expression_hash,
@@ -147,6 +173,7 @@ async def calculate_sync(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="API key rate limit exceeded")
     if not await rate_limiter_ip.allow(client_ip):
         record_rate_limit_rejection("ip")
+        _record_policy("deny", "ip_rate_limit")
         await _persist_audit(
             api_key_id,
             expression_hash,
@@ -160,6 +187,7 @@ async def calculate_sync(
     try:
         await consume_quota(session, api_key_id, app.state.quota_config)
     except QuotaExceededError as exc:
+        _record_policy("deny", "quota")
         await _persist_audit(
             api_key_id,
             expression_hash,
@@ -175,7 +203,15 @@ async def calculate_sync(
     should_use_cache = settings.cache_pure_results and payload.is_pure_arithmetic()
     cached_value = await cache.get(cache_key) if should_use_cache else None
     if cached_value is not None:
-        await _persist_audit(api_key_id, cache_key, payload.expression, client_ip, "cache_hit", 0.0)
+        _record_policy("allow", "cache_hit")
+        await _persist_audit(
+            api_key_id,
+            cache_key,
+            payload.expression,
+            client_ip,
+            "cache_hit",
+            0.0,
+        )
         return CalculationResponse(
             expression=payload.expression,
             value=cached_value,
@@ -202,6 +238,9 @@ async def calculate_sync(
             span.set_attribute("rpc.method", "Evaluate")
             span.set_attribute("net.peer.name", settings.evaluator.host)
             span.set_attribute("net.peer.port", settings.evaluator.port)
+            span.set_attribute("calculator.tenant", tenant)
+            span.set_attribute("calculator.queue", "sync")
+            span.set_attribute("calculator.policy_outcome", get_policy_context())
             try:
                 response = await stub.Evaluate(
                     request_message,
@@ -221,6 +260,7 @@ async def calculate_sync(
         status_code = exc.code()
         detail = exc.details() or "Evaluator unavailable"
         if status_code == grpc.StatusCode.INVALID_ARGUMENT:
+            _record_policy("deny", "invalid_expression")
             await _persist_audit(
                 api_key_id,
                 expression_hash,
@@ -236,6 +276,7 @@ async def calculate_sync(
                 from_cache=False,
             )
         if status_code == grpc.StatusCode.RESOURCE_EXHAUSTED:
+            _record_policy("deny", "evaluator_rate_limit")
             await _persist_audit(
                 api_key_id,
                 expression_hash,
@@ -248,6 +289,7 @@ async def calculate_sync(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Evaluator busy",
             ) from exc
+        _record_policy("error", "evaluator_error")
         logger.exception("Evaluator call failed")
         await _persist_audit(
             api_key_id,
@@ -263,6 +305,7 @@ async def calculate_sync(
     result_type = response.WhichOneof("result")
 
     if result_type == "error":
+        _record_policy("error", "calculation_error")
         await _persist_audit(
             api_key_id,
             expression_hash,
@@ -292,6 +335,7 @@ async def calculate_sync(
         )
     )
 
+    _record_policy("allow", "sync_execution")
     return CalculationResponse(
         expression=payload.expression,
         value=response.value,
@@ -317,10 +361,30 @@ async def submit_job(
     api_key: AuthenticatedAPIKey = Depends(require_api_key),
     session: AsyncSession = Depends(get_session),
 ) -> JobResultResponse:
+    tenant = api_key.record.owner
+    set_tenant_context(tenant)
+    set_queue_context(settings.job.queue_name)
+    set_policy_context("pending")
+    root_span = trace.get_current_span()
+    if root_span and root_span.is_recording():
+        root_span.set_attribute("calculator.tenant", tenant)
+        root_span.set_attribute("calculator.queue", settings.job.queue_name)
+        root_span.set_attribute("calculator.policy_outcome", "pending")
+
+    def _record_policy(decision: str, rule: str) -> None:
+        record_policy_decision(tenant=tenant, rule=rule, decision=decision)
+        set_policy_context(decision)
+        current = trace.get_current_span()
+        if current and current.is_recording():
+            current.set_attribute("calculator.policy_outcome", decision)
+        if root_span and root_span.is_recording():
+            root_span.set_attribute("calculator.policy_outcome", decision)
+
     api_key_id = api_key.record.id
     job_rate_limiter: RateLimiter = app.state.job_rate_limit_key
     if not await job_rate_limiter.allow(str(api_key_id)):
         record_rate_limit_rejection("job_api_key")
+        _record_policy("deny", "job_rate_limit")
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="API key job rate limit exceeded",
@@ -329,28 +393,94 @@ async def submit_job(
     if settings.job.max_queue_size > 0:
         queued_jobs = await jobs.count_queued_jobs(session)
         if queued_jobs >= settings.job.max_queue_size:
+            _record_policy("deny", "queue_capacity")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Job queue is full",
             )
 
+    policy_decision = await evaluate_job_policy(
+        session,
+        app.state.redis,
+        tenant=tenant,
+        submission=payload,
+        settings=settings,
+        base_quota=app.state.quota_config,
+    )
+
+    set_queue_context(policy_decision.queue_name)
+    if root_span and root_span.is_recording():
+        root_span.set_attribute("calculator.queue", policy_decision.queue_name)
+        root_span.set_attribute("job.queue_name", policy_decision.queue_name)
+        root_span.set_attribute("job.task_type", policy_decision.task_type)
+        root_span.set_attribute("job.requested_priority", policy_decision.requested_priority)
+        root_span.set_attribute("job.assigned_priority", policy_decision.normalized_priority)
+        root_span.set_attribute("job.policy_enforced", policy_decision.policy_enforced)
+        root_span.set_attribute("job.policy_violation_count", len(policy_decision.violations))
+
+    if not policy_decision.allowed:
+        _record_policy("deny", "policy_violation")
+        for violation in policy_decision.violations:
+            record_policy_decision(tenant=tenant, rule=violation, decision="violation")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "policy_violation",
+                "reason": policy_decision.denial_reason,
+                "violations": policy_decision.violations,
+            },
+        )
+
+    _record_policy("allow", "job_submission")
+    if policy_decision.policy_enforced:
+        record_policy_decision(tenant=tenant, rule="policy_enforced", decision="violation")
+    for violation in policy_decision.violations:
+        record_policy_decision(tenant=tenant, rule=violation, decision="violation")
+
     try:
-        await consume_quota(session, api_key_id, app.state.quota_config)
+        await consume_quota(session, api_key_id, policy_decision.quota_config)
     except QuotaExceededError as exc:
+        _record_policy("deny", "quota")
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
 
-    job = await jobs.create_job(session, payload, settings=settings)
+    metadata = jobs.JobCreationMetadata(
+        tenant=tenant,
+        queue_name=policy_decision.queue_name,
+        task_type=policy_decision.task_type,
+        policy_snapshot=policy_decision.snapshot,
+        policy_violations=policy_decision.violations,
+        policy_enforced=policy_decision.policy_enforced,
+        estimated_runtime_ms=policy_decision.estimated_runtime_ms,
+        assigned_priority=policy_decision.normalized_priority,
+        requested_priority=policy_decision.requested_priority,
+    )
+
+    job = await jobs.create_job(session, payload, settings=settings, metadata=metadata)
     job_cache: JobCache = app.state.job_cache
     job_payload = jobs.serialize_job(job, settings)
     await job_cache.set(job.id, job_payload)
     await jobs.publish_job_update(app.state.redis, job.id, job_payload, settings=settings)
+
+    span = trace.get_current_span()
+    if span.is_recording():
+        span.set_attribute("job.queue_name", job.queue_name)
+        span.set_attribute("job.task_type", job.task_type)
+        span.set_attribute("job.priority", job.priority)
+        span.set_attribute("job.policy_enforced", policy_decision.policy_enforced)
+        span.set_attribute("calculator.policy_outcome", get_policy_context())
 
     trace_headers: dict[str, str] = {}
     inject(trace_headers)
     request_id = getattr(request.state, "request_id", None)
     if request_id:
         trace_headers.setdefault("x-request-id", request_id)
-    enqueue_job(job.id, trace_context=trace_headers)
+    trace_headers["calculator-tenant"] = tenant
+    trace_headers["calculator-queue"] = job.queue_name
+    trace_headers["calculator-policy"] = get_policy_context()
+    trace_headers["calculator-task-type"] = job.task_type
+    trace_headers["calculator-priority"] = str(job.priority)
+
+    enqueue_job(job.id, queue_name=policy_decision.queue_name, trace_context=trace_headers)
 
     return JobResultResponse(**job_payload)
 

@@ -20,15 +20,17 @@
 - **Observability:** OpenTelemetry instrumentation across gateway + evaluator; traces to Tempo, metrics to Prometheus, logs to Loki; dashboards in Grafana with SLOs (latency, error rate, saturation).
 - **Testing:** contract tests between gateway and evaluator, chaos tests (kill sandbox mid-execution), fuzz tests for expression inputs, load test using k6.
 
-## Phase 2 – Distributed Compute Backbone (Weeks 5-8)
+## Phase 2 - Distributed Compute Backbone (Weeks 5-8)
 
-- **Job Orchestrator:** introduce Celery (Redis broker + result backend) or Ray; define Job schema (UUID, status, payload, retries, metadata).
-- **API Additions:** `/jobs` POST for async submission, `/jobs/{id}` GET for status/result, WebSocket for push updates.
-- **Task Types:** arithmetic (existing), “heavy math” (Monte Carlo, big matrix), delegated to worker pools (CPU vs GPU labels).
-- **Caching Layer:** add Redis + optional Postgres cache for deterministic expressions; implement TTL and invalidation.
-- **Autoscaling:** configure Horizontal Pod Autoscaler (if K8s) or docker-compose scale; include worker heartbeat, Prometheus metrics for queue length.
-- **Governance:** define policy engine (OPA or custom) to enforce per-tenant limits, banned operations, runtime ceilings.
-- **Testing:** resilience scenarios (retry storm, slow worker), soak testing 24h; integration tests verifying job metadata & persistence.
+**Status:** COMPLETE. Observability and runbooks delivered; production Celery stack with multi-lane routing, policy governance, autoscaling guidance, and CI validation in place (heavy-lane tuning continues).
+
+- **Job Orchestrator:** Celery with Redis broker/backend, persistent job model, retries, metadata, and dedicated heavy/GPU workers wired via Compose.
+- **API Additions:** `/jobs` POST plus `/jobs/{id}` GET and WebSocket push updates with integration coverage.
+- **Task Types:** arithmetic, heavy math, and GPU lanes classified via the policy engine, routed to priority workers, and exposed through Prometheus metrics.
+- **Caching Layer:** Redis result cache with TTL plus Postgres persistence for deterministic expressions.
+- **Autoscaling:** decision helper, runbook guidance, and metrics-driven triggers captured alongside scripts and tests.
+- **Governance:** per-tenant policies, banned operations, queue overrides, and quota integration enforced with cache invalidation.
+- **Testing:** integration suite exercises multi-queue routing, policy enforcement, resilience paths, WebSocket streaming, and load thresholds.
 
 ## Phase 3 – Symbolic & Codegen Engine (Weeks 9-12)
 

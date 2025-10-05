@@ -1,14 +1,24 @@
-"""SQLAlchemy models for the gateway service."""
+﻿"""SQLAlchemy models for the gateway service."""
 
 from __future__ import annotations
 
 import datetime as dt
 from typing import Any, Dict, Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.types import JSON, TypeDecorator
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.types import JSON, TypeDecorator
 
 
 class JSONBCompat(TypeDecorator):
@@ -78,15 +88,44 @@ class Quota(Base):
     limit: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class TenantPolicy(Base):
+    __tablename__ = "tenant_policies"
+    __table_args__ = (
+        UniqueConstraint("tenant", name="uq_tenant_policies_tenant"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(512))
+    max_priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    allowed_queues: Mapped[list[str]] = mapped_column(JSONBCompat, nullable=False, default=list)
+    max_runtime_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=10000)
+    banned_patterns: Mapped[list[str]] = mapped_column(JSONBCompat, nullable=False, default=list)
+    allow_heavy: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    allow_gpu: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    quota_limit: Mapped[Optional[int]] = mapped_column(Integer)
+    quota_window_seconds: Mapped[Optional[int]] = mapped_column(Integer)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=dt.datetime.utcnow, nullable=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=dt.datetime.utcnow,
+        onupdate=dt.datetime.utcnow,
+        nullable=False,
+    )
+
+
 class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
         Index("ix_jobs_status", "status"),
         Index("ix_jobs_created_at", "created_at"),
         Index("ix_jobs_priority", "priority"),
+        Index("ix_jobs_queue_name", "queue_name"),
+        Index("ix_jobs_tenant", "tenant"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String(255), nullable=False, default="default")
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=dt.datetime.utcnow, nullable=False
@@ -97,5 +136,13 @@ class Job(Base):
     context: Mapped[Dict[str, Any]] = mapped_column(JSONBCompat, default=dict, nullable=False)
     result_payload: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONBCompat)
     error: Mapped[Optional[str]] = mapped_column(Text)
+    requested_priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tags: Mapped[list[str]] = mapped_column(JSONBCompat, default=list, nullable=False)
+    queue_name: Mapped[str] = mapped_column(String(128), nullable=False, default="calculator-jobs")
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False, default="standard")
+    policy_snapshot: Mapped[Dict[str, Any]] = mapped_column(JSONBCompat, default=dict, nullable=False)
+    policy_violations: Mapped[list[str]] = mapped_column(JSONBCompat, default=list, nullable=False)
+    policy_enforced: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    estimated_runtime_ms: Mapped[Optional[int]] = mapped_column(Integer)
+

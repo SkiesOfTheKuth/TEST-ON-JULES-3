@@ -1,11 +1,11 @@
-"""Pydantic schemas for API contracts."""
+﻿"""Pydantic schemas for API contracts."""
 
 from __future__ import annotations
 
 import datetime as dt
 import hashlib
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -44,21 +44,39 @@ class JobSubmissionRequest(BaseModel):
     context: Dict[str, float] = Field(default_factory=dict)
     priority: int = Field(0, ge=0)
     tags: list[str] = Field(default_factory=list)
+    task_type: Optional[Literal["standard", "heavy", "gpu"]] = None
+    requires_gpu: bool = False
+    estimated_runtime_ms: Optional[int] = Field(default=None, ge=1)
+
+
+class JobPolicyStatus(BaseModel):
+    enforced: bool = False
+    violations: list[str] = Field(default_factory=list)
+    snapshot: Dict[str, Any] = Field(default_factory=dict)
+    decision_reason: Optional[str] = None
+    queue_decision: Optional[str] = None
 
 
 class JobStatusResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    tenant: str
     status: str
     created_at: dt.datetime
     started_at: Optional[dt.datetime] = None
     completed_at: Optional[dt.datetime] = None
     priority: int
+    requested_priority: int
     tags: list[str] = Field(default_factory=list)
+    queue_name: str
+    task_type: str
+    estimated_runtime_ms: Optional[int] = None
+    policy: JobPolicyStatus = Field(default_factory=JobPolicyStatus)
     links: Dict[str, str] = Field(default_factory=dict)
 
 
 class JobResultResponse(JobStatusResponse):
     result_payload: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+

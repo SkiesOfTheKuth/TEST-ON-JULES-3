@@ -21,19 +21,29 @@ from opentelemetry.sdk.trace.export import (
     SimpleSpanProcessor,
 )
 from opentelemetry.trace import set_tracer_provider
-from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client import Counter, Gauge, Histogram, REGISTRY
 from prometheus_fastapi_instrumentator import Instrumentator
 from pythonjsonlogger import jsonlogger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from .config import GatewaySettings
+from .config import GatewaySettings, get_settings
 
 logger = logging.getLogger(__name__)
 
 REQUEST_ID_CONTEXT: contextvars.ContextVar[str] = contextvars.ContextVar(
     "gateway_request_id", default="-"
+)
+
+TENANT_CONTEXT: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "gateway_tenant", default="-"
+)
+QUEUE_CONTEXT: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "gateway_queue", default="-"
+)
+POLICY_CONTEXT: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "gateway_policy_outcome", default="unknown"
 )
 
 _REQUEST_COUNTER: Counter | None = None
@@ -42,6 +52,40 @@ _RATE_LIMIT_REJECTIONS: Gauge | None = None
 _RATE_LIMIT_HISTORY: dict[str, deque[float]] = {}
 _METRICS_INITIALIZED = False
 _FASTAPI_INSTRUMENTED = False
+
+settings = get_settings()
+_METRIC_NAMESPACE = settings.observability.metrics_namespace
+
+
+def _register_metric(name: str, factory):
+    full_name = f"{_METRIC_NAMESPACE}_{name}" if _METRIC_NAMESPACE else name
+    try:
+        return factory()
+    except ValueError:
+        existing = getattr(REGISTRY, '_names_to_collectors', {}).get(full_name)
+        if existing is None:
+            raise
+        return existing
+
+
+_POLICY_DECISIONS = _register_metric(
+    'policy_decisions_total',
+    lambda: Counter(
+        'policy_decisions_total',
+        'Count of policy engine evaluation outcomes.',
+        labelnames=('tenant', 'rule', 'decision'),
+        namespace=_METRIC_NAMESPACE,
+    ),
+)
+_POLICY_VIOLATIONS = _register_metric(
+    'policy_violations_total',
+    lambda: Counter(
+        'policy_violations_total',
+        'Count of policy evaluations resulting in enforcement.',
+        labelnames=('tenant', 'rule'),
+        namespace=_METRIC_NAMESPACE,
+    ),
+)
 
 
 class _RequestIdFilter(logging.Filter):
@@ -66,6 +110,16 @@ class _TraceContextFilter(logging.Filter):
             record.span_id = "-"
         return True
 
+class _JobMetadataFilter(logging.Filter):
+    """Attach queue/policy/tenant metadata to log records."""
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: D401
+        record.tenant = TENANT_CONTEXT.get()
+        record.queue = QUEUE_CONTEXT.get()
+        record.policy_outcome = POLICY_CONTEXT.get()
+        return True
+
+
 
 class ObservabilityMiddleware(BaseHTTPMiddleware):
     """Capture request level metrics and manage request context."""
@@ -81,6 +135,9 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
         token = REQUEST_ID_CONTEXT.set(request_id)
+        tenant_token = TENANT_CONTEXT.set("-")
+        queue_token = QUEUE_CONTEXT.set("-")
+        policy_token = POLICY_CONTEXT.set("unknown")
         request.state.request_id = request_id
 
         start_time = time.perf_counter()
@@ -103,6 +160,9 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
             return response
         finally:
             REQUEST_ID_CONTEXT.reset(token)
+            TENANT_CONTEXT.reset(tenant_token)
+            QUEUE_CONTEXT.reset(queue_token)
+            POLICY_CONTEXT.reset(policy_token)
 
 
 def _observe_request(request: Request, endpoint: str, status_code: int, duration: float) -> None:
@@ -122,9 +182,8 @@ def configure_logging(settings: GatewaySettings) -> None:
     handler = logging.StreamHandler()
     handler.addFilter(_RequestIdFilter())
     handler.addFilter(_TraceContextFilter())
-    formatter = jsonlogger.JsonFormatter(
-        "%(asctime)s %(levelname)s %(name)s %(message)s %(request_id)s %(trace_id)s %(span_id)s"
-    )
+    handler.addFilter(_JobMetadataFilter())
+    formatter = jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s %(request_id)s %(tenant)s %(queue)s %(policy_outcome)s %(trace_id)s %(span_id)s")
     handler.setFormatter(formatter)
 
     root = logging.getLogger()
@@ -224,3 +283,39 @@ def _cleanup_rate_limit_history() -> None:
 
 def get_request_id() -> str:
     return REQUEST_ID_CONTEXT.get()
+
+
+
+def set_tenant_context(tenant: str) -> None:
+    TENANT_CONTEXT.set((tenant or '-').strip() or '-')
+
+
+def set_queue_context(queue: str) -> None:
+    QUEUE_CONTEXT.set((queue or '-').strip() or '-')
+
+
+def set_policy_context(decision: str) -> None:
+    POLICY_CONTEXT.set((decision or 'unknown').strip() or 'unknown')
+
+
+def get_tenant_context() -> str:
+    return TENANT_CONTEXT.get()
+
+
+def get_queue_context() -> str:
+    return QUEUE_CONTEXT.get()
+
+
+def get_policy_context() -> str:
+    return POLICY_CONTEXT.get()
+
+
+def record_policy_decision(*, tenant: str, rule: str, decision: str) -> None:
+    normalized_tenant = (tenant or '-').strip() or '-'
+    normalized_rule = (rule or 'unspecified').strip() or 'unspecified'
+    normalized_decision = (decision or 'unknown').strip() or 'unknown'
+    set_tenant_context(normalized_tenant)
+    set_policy_context(normalized_decision)
+    _POLICY_DECISIONS.labels(tenant=normalized_tenant, rule=normalized_rule, decision=normalized_decision).inc()
+    if normalized_decision.lower() not in {'allow', 'pass'}:
+        _POLICY_VIOLATIONS.labels(tenant=normalized_tenant, rule=normalized_rule).inc()
