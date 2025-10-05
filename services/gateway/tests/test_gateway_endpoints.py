@@ -138,6 +138,27 @@ class StubSession:
     async def commit(self):
         return None
 
+    async def execute(self, stmt):
+        class _Scalars:
+            @staticmethod
+            def first():
+                return None
+
+            @staticmethod
+            def one_or_none():
+                return None
+
+        class _Result:
+            @staticmethod
+            def scalar_one_or_none():
+                return None
+
+            @staticmethod
+            def scalars():
+                return _Scalars()
+
+        return _Result()
+
 
 async def fake_get_session():
     yield StubSession()
@@ -178,6 +199,9 @@ def gateway_test_context(monkeypatch):
         def set_status(self, status):
             return None
 
+        def is_recording(self):
+            return False
+
     class _SpanContextManager:
         def __init__(self, *args, **kwargs):
             self.span = _StubSpan()
@@ -194,6 +218,7 @@ def gateway_test_context(monkeypatch):
 
     stub_trace = types.ModuleType("opentelemetry.trace")
     stub_trace.get_tracer = lambda name=None: _StubTracer()
+    stub_trace.get_current_span = lambda: _StubSpan()
     stub_trace.SpanKind = types.SimpleNamespace(CLIENT="client", SERVER="server")
 
     class _StubStatus:
@@ -265,7 +290,7 @@ def gateway_test_context(monkeypatch):
             raise main.HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Missing API key")
         if key != "valid-key":
             raise main.HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Invalid API key")
-        return security.AuthenticatedAPIKey(record=SimpleNamespace(id=123), raw_key=key)
+        return security.AuthenticatedAPIKey(record=SimpleNamespace(id=123, owner="test-tenant"), raw_key=key)
 
     app.dependency_overrides[main.require_api_key] = override_require_api_key
 
@@ -286,75 +311,75 @@ def gateway_test_context(monkeypatch):
 
     fake_count_queued_jobs.value = 0
 
-async def fake_create_job(session, submission, settings, metadata=None):
-    if metadata is None:
-        metadata = SimpleNamespace(
-            tenant="test-tenant",
-            queue_name=settings.job.queue_name,
-            task_type="standard",
-            policy_snapshot={},
-            policy_violations=[],
-            policy_enforced=False,
-            estimated_runtime_ms=None,
-            assigned_priority=submission.priority,
-            requested_priority=submission.priority,
+    async def fake_create_job(session, submission, settings, metadata=None):
+        if metadata is None:
+            metadata = SimpleNamespace(
+                tenant="test-tenant",
+                queue_name=main.settings.job.queue_name,
+                task_type="standard",
+                policy_snapshot={},
+                policy_violations=[],
+                policy_enforced=False,
+                estimated_runtime_ms=None,
+                assigned_priority=submission.priority,
+                requested_priority=submission.priority,
+            )
+        job_id = f"job-{len(recorded_jobs) + 1}"
+        assigned_priority = getattr(metadata, 'assigned_priority', None)
+        job = SimpleNamespace(
+            id=job_id,
+            tenant=getattr(metadata, 'tenant', 'test-tenant'),
+            status="queued",
+            created_at=dt.datetime.utcnow(),
+            started_at=None,
+            completed_at=None,
+            priority=assigned_priority if assigned_priority is not None else submission.priority,
+            requested_priority=getattr(metadata, 'requested_priority', submission.priority),
+            tags=list(submission.tags),
+            context=submission.context,
+            input_expression=submission.input_expression,
+            result_payload=None,
+            error=None,
+            queue_name=getattr(metadata, 'queue_name', main.settings.job.queue_name),
+            task_type=getattr(metadata, 'task_type', 'standard'),
+            policy_snapshot=dict(getattr(metadata, 'policy_snapshot', {})),
+            policy_violations=list(getattr(metadata, 'policy_violations', [])),
+            policy_enforced=bool(getattr(metadata, 'policy_enforced', False)),
+            estimated_runtime_ms=getattr(metadata, 'estimated_runtime_ms', None),
         )
-    job_id = f"job-{len(recorded_jobs) + 1}"
-    assigned_priority = getattr(metadata, 'assigned_priority', None)
-    job = SimpleNamespace(
-        id=job_id,
-        tenant=getattr(metadata, 'tenant', 'test-tenant'),
-        status="queued",
-        created_at=dt.datetime.utcnow(),
-        started_at=None,
-        completed_at=None,
-        priority=assigned_priority if assigned_priority is not None else submission.priority,
-        requested_priority=getattr(metadata, 'requested_priority', submission.priority),
-        tags=list(submission.tags),
-        context=submission.context,
-        input_expression=submission.input_expression,
-        result_payload=None,
-        error=None,
-        queue_name=getattr(metadata, 'queue_name', settings.job.queue_name),
-        task_type=getattr(metadata, 'task_type', 'standard'),
-        policy_snapshot=dict(getattr(metadata, 'policy_snapshot', {})),
-        policy_violations=list(getattr(metadata, 'policy_violations', [])),
-        policy_enforced=bool(getattr(metadata, 'policy_enforced', False)),
-        estimated_runtime_ms=getattr(metadata, 'estimated_runtime_ms', None),
-    )
-    recorded_jobs[job_id] = job
-    return job
+        recorded_jobs[job_id] = job
+        return job
 
-def fake_serialize_job(job, settings):
-    return {
-        "id": job.id,
-        "tenant": job.tenant,
-        "status": job.status,
-        "created_at": job.created_at.isoformat(),
-        "started_at": job.started_at.isoformat() if job.started_at else None,
-        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
-        "priority": job.priority,
-        "requested_priority": job.requested_priority,
-        "tags": list(job.tags),
-        "queue_name": job.queue_name,
-        "task_type": job.task_type,
-        "estimated_runtime_ms": job.estimated_runtime_ms,
-        "policy": {
-            "enforced": job.policy_enforced,
-            "violations": list(job.policy_violations),
-            "snapshot": dict(job.policy_snapshot),
-            "decision_reason": None,
-            "queue_decision": job.queue_name,
-        },
-        "links": {
-            "self": f"/jobs/{job.id}",
-            "poll": f"/jobs/{job.id}",
-            "result": f"/jobs/{job.id}",
-            "ws": f"/ws/jobs/{job.id}",
-        },
-        "result_payload": job.result_payload,
-        "error": job.error,
-    }
+    def fake_serialize_job(job, settings):
+        return {
+            "id": job.id,
+            "tenant": job.tenant,
+            "status": job.status,
+            "created_at": job.created_at.isoformat(),
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            "priority": job.priority,
+            "requested_priority": job.requested_priority,
+            "tags": list(job.tags),
+            "queue_name": job.queue_name,
+            "task_type": job.task_type,
+            "estimated_runtime_ms": job.estimated_runtime_ms,
+            "policy": {
+                "enforced": job.policy_enforced,
+                "violations": list(job.policy_violations),
+                "snapshot": dict(job.policy_snapshot),
+                "decision_reason": None,
+                "queue_decision": job.queue_name,
+            },
+            "links": {
+                "self": f"/jobs/{job.id}",
+                "poll": f"/jobs/{job.id}",
+                "result": f"/jobs/{job.id}",
+                "ws": f"/ws/jobs/{job.id}",
+            },
+            "result_payload": job.result_payload,
+            "error": job.error,
+        }
 
     async def fake_fetch_job(session, job_id):
         return recorded_jobs.get(job_id)
@@ -371,8 +396,7 @@ def fake_serialize_job(job, settings):
 
     monkeypatch.setattr(main, "enqueue_job", fake_enqueue_job)
 
-    print("DEBUG fixture yield")
-    yield {
+    context = {
         "main": main,
         "schemas": schemas,
         "security": security,
@@ -391,13 +415,19 @@ def fake_serialize_job(job, settings):
         "create_job_stub": fake_create_job,
     }
 
-    recorded_audits.clear()
-    app.dependency_overrides.clear()
-    sys.modules.pop("app.instrumentation", None)
-    sys.modules.pop("opentelemetry", None)
-    sys.modules.pop("opentelemetry.trace", None)
-    sys.modules.pop("opentelemetry.propagate", None)
-    sys.modules.pop("opentelemetry.context", None)
+    try:
+        yield context
+    finally:
+        recorded_audits.clear()
+        app.dependency_overrides.clear()
+        for module_name in (
+            "app.instrumentation",
+            "opentelemetry",
+            "opentelemetry.trace",
+            "opentelemetry.propagate",
+            "opentelemetry.context",
+        ):
+            sys.modules.pop(module_name, None)
 
 
 def _make_request(host="127.0.0.1", *, method="POST", path="/calculate"):
@@ -421,7 +451,7 @@ def test_calculate_success_invokes_evaluator(gateway_test_context):
 
     payload = ExpressionRequest(expression="1+2")
     request = _make_request()
-    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123), raw_key="valid-key")
+    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123, owner="test-tenant"), raw_key="valid-key")
     session = StubSession()
 
     response = asyncio.run(main.calculate_sync(payload, request, api_key=api_key, session=session))
@@ -441,7 +471,7 @@ def test_calculate_uses_cache_on_repeated_calls(gateway_test_context):
 
     payload = ExpressionRequest(expression="2*3")
     request = _make_request()
-    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123), raw_key="valid-key")
+    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123, owner="test-tenant"), raw_key="valid-key")
     session = StubSession()
 
     first = asyncio.run(main.calculate_sync(payload, request, api_key=api_key, session=session))
@@ -460,7 +490,7 @@ def test_rate_limit_rejection_returns_http_429(gateway_test_context):
     ctx["rate_limiter_key"].allowed = False
     payload = ExpressionRequest(expression="5-3")
     request = _make_request()
-    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123), raw_key="valid-key")
+    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123, owner="test-tenant"), raw_key="valid-key")
     session = StubSession()
 
     with pytest.raises(main.HTTPException) as exc:
@@ -477,7 +507,7 @@ def test_submit_job_enqueues_and_caches_metadata(gateway_test_context):
 
     payload = JobSubmissionRequest(input_expression="1+2")
     request = _make_request(path="/jobs")
-    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123), raw_key="valid-key")
+    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123, owner="test-tenant"), raw_key="valid-key")
     session = StubSession()
 
     response = asyncio.run(main.submit_job(payload, request, api_key=api_key, session=session))
@@ -501,7 +531,7 @@ def test_submit_job_rate_limited_returns_http_429(gateway_test_context):
     ctx["job_rate_limiter"].allowed = False
     payload = JobSubmissionRequest(input_expression="sin(0)")
     request = _make_request(path="/jobs")
-    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123), raw_key="valid-key")
+    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123, owner="test-tenant"), raw_key="valid-key")
     session = StubSession()
 
     with pytest.raises(main.HTTPException) as exc:
@@ -519,7 +549,7 @@ def test_submit_job_queue_full_returns_503(gateway_test_context):
     ctx["count_queued_jobs"].value = main.settings.job.max_queue_size
     payload = JobSubmissionRequest(input_expression="3*3")
     request = _make_request(path="/jobs")
-    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123), raw_key="valid-key")
+    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123, owner="test-tenant"), raw_key="valid-key")
     session = StubSession()
 
     with pytest.raises(main.HTTPException) as exc:
@@ -539,7 +569,7 @@ def test_get_job_fetches_from_persistence_when_cache_miss(gateway_test_context):
     job = asyncio.run(ctx["create_job_stub"](StubSession(), submission, settings=main.settings))
     ctx["job_cache"].storage.pop(job.id, None)
 
-    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123), raw_key="valid-key")
+    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123, owner="test-tenant"), raw_key="valid-key")
     session = StubSession()
 
     response = asyncio.run(main.get_job(job.id, api_key=api_key, session=session))
@@ -603,7 +633,7 @@ def test_quota_exceeded_returns_http_429(gateway_test_context):
     ctx["consume_quota"].should_raise = True
     payload = ExpressionRequest(expression="8/2")
     request = _make_request()
-    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123), raw_key="valid-key")
+    api_key = AuthenticatedAPIKey(record=SimpleNamespace(id=123, owner="test-tenant"), raw_key="valid-key")
     session = StubSession()
 
     with pytest.raises(main.HTTPException) as exc:

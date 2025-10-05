@@ -8,3 +8,4 @@
 | 2025-10-05 | autoscale-resilience | Add autoscale settings & CLI, queue-aware dispatch, resilience pytest suite, Grafana phase2 queue dashboard updates. | TBA   |
 | 2025-10-05 | observability | Update Grafana dashboards (Gateway Overview, Phase 2 Queue Lanes, Worker Health), enhance tracing/logging with policy metadata, add worker/autoscale metrics, refresh runbooks and usage docs. | TBA   |
 
+| 2025-10-06 | phase2 | Add queue governance policy engine, multi-lane routing, autoscale helpers, and updated tests/docs/runbooks for Phase 2 completion. | TBA   |

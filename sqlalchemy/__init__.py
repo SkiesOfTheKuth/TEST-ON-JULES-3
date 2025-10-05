@@ -13,6 +13,7 @@ __all__ = [
     "Integer",
     "String",
     "Text",
+    "UniqueConstraint",
     "select",
     "func",
 ]
@@ -45,6 +46,12 @@ class Index:
     def __init__(self, name: str, *columns: Sequence[str]) -> None:
         self.name = name
         self.columns = columns
+
+
+class UniqueConstraint:
+    def __init__(self, *columns: Sequence[str], name: str | None = None) -> None:
+        self.columns = list(columns)
+        self.name = name
 
 
 class _FuncNamespace:
