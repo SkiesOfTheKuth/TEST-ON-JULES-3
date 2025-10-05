@@ -89,14 +89,18 @@ def worker_task_span(
             span.record_exception(exc)
             span.set_status(Status(StatusCode.ERROR))
             span.set_attribute("outcome", outcome)
-            metrics.jobs_failed.labels(queue=queue, task=task).inc()
             raise
         else:
-            outcome = "success"
-            span.set_status(Status(StatusCode.OK))
-            span.set_attribute("outcome", outcome)
+            explicit_outcome = getattr(span, "attributes", {}).get("outcome")
+            outcome = str(explicit_outcome) if explicit_outcome else "success"
+            if not explicit_outcome:
+                span.set_attribute("outcome", outcome)
+            span.set_status(Status(StatusCode.OK) if outcome == "success" else Status(StatusCode.ERROR))
         finally:
             worker_process_ms = (time.perf_counter() - start_time) * 1000.0
             span.set_attribute("worker_process_ms", worker_process_ms)
             metrics.celery_task_runtime_seconds.labels(task=task).observe(worker_process_ms / 1000.0)
             metrics.jobs_in_progress.labels(queue=queue, task=task).dec()
+            final_outcome = getattr(span, "attributes", {}).get("outcome", outcome)
+            if final_outcome == "failed":
+                metrics.jobs_failed.labels(queue=queue, task=task).inc()
