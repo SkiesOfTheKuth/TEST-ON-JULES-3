@@ -59,12 +59,12 @@ Phase 2 adds an async job API backed by Celery and Redis. Use it for heavyweight
 
 1. Submit a job:
    ````bash
-   curl -X POST http://localhost:8080/jobs \
+   curl -fsS -X POST http://localhost:8080/jobs \
      -H "X-Api-Key: <your-key>" \
      -H "Content-Type: application/json" \
      -d '{
-           "input_expression": "pow(2, 12) + sqrt(16)",
-           "context": {"scale": 3},
+           "input_expression": "heavy_compute(100000)",
+           "context": {"precision": 8},
            "priority": 1,
            "tags": ["demo", "retryable"]
          }'
@@ -72,16 +72,16 @@ Phase 2 adds an async job API backed by Celery and Redis. Use it for heavyweight
    The response returns the job metadata, including polling links and WebSocket URI (`/ws/jobs/<id>`).
 2. Poll for completion:
    ````bash
-   curl -H "X-Api-Key: <your-key>" http://localhost:8080/jobs/<job-id>
+   curl -fsS -H "X-Api-Key: <your-key>" http://localhost:8080/jobs/<job-id>
    ````
-   Successful jobs return the cached payload; failures include the error string recorded in Postgres and Prometheus (`calculator_gateway_jobs_failed_total`).
+   Successful jobs return the cached payload; failures include the error string recorded in Postgres and Prometheus (`jobs_failed{queue,task}`).
 3. Optional: stream updates over WebSockets (requires `wscat` or similar):
    ````bash
-   npx wscat -c ws://localhost:8080/ws/jobs/<job-id> -H "X-Api-Key: <your-key>"
+   npx wscat -H "X-Api-Key: <your-key>" -c ws://localhost:8080/ws/jobs/<job-id>
    ````
 4. Explore metrics and dashboards:
-   - `curl -s http://localhost:8080/metrics | grep calculator_gateway_job`
-   - Grafana → `Gateway Overview` → Async panels for throughput, success rate, and wait time.
+   - `curl -s http://localhost:8080/metrics | grep jobs_`
+   - Grafana → `calculator-phase2` dashboard → Async panels for throughput, success rate, wait time, and WebSocket health.
 
 Testing
 -------

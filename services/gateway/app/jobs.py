@@ -15,6 +15,11 @@ from .config import GatewaySettings
 from .models import Job
 from .schemas import JobResultResponse, JobSubmissionRequest
 
+from src.notifications.notifications import (
+    record_publish_failure,
+    record_publish_success,
+)
+
 STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
 STATUS_SUCCEEDED = "succeeded"
@@ -95,7 +100,9 @@ async def publish_job_update(
     message = json.dumps(payload)
     try:
         await redis.publish(channel, message)
+        record_publish_success()
     except Exception:  # noqa: BLE001 - redis connection issues should not break workers
+        record_publish_failure()
         return
 
 

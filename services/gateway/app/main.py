@@ -21,6 +21,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.protos import evaluator_pb2, evaluator_pb2_grpc
 
+from src.gateway.instrumentation import (
+    start_enqueue_span,
+    start_job_status_span,
+    start_ws_span,
+)
+from src.notifications.notifications import (
+    record_ws_send_error,
+    ws_client_connected,
+    ws_client_disconnected,
+)
+
 from . import jobs
 from .cache import JobCache, ResultCache
 from .config import get_settings
@@ -53,6 +64,8 @@ app = FastAPI(title="Calculator Gateway", version="1.0.0")
 instrument_app(app, settings)
 
 tracer = trace.get_tracer(__name__)
+
+JOB_TASK_NAME = "gateway.execute_job"
 
 
 @app.on_event("startup")
@@ -348,9 +361,21 @@ async def submit_job(
     trace_headers: dict[str, str] = {}
     inject(trace_headers)
     request_id = getattr(request.state, "request_id", None)
-    if request_id:
-        trace_headers.setdefault("x-request-id", request_id)
-    enqueue_job(job.id, trace_context=trace_headers)
+    queue_name = settings.job.queue_name
+
+    with start_enqueue_span(job.id, queue_name, JOB_TASK_NAME) as span:
+        if request_id:
+            span.set_attribute("request_id", request_id)
+            trace_headers.setdefault("x-request-id", request_id)
+        span.set_attribute("api_key_id", str(api_key.record.id))
+        try:
+            enqueue_job(job.id, trace_context=trace_headers)
+        except Exception as exc:  # noqa: BLE001
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR))
+            raise
+        else:
+            span.set_status(Status(StatusCode.OK))
 
     return JobResultResponse(**job_payload)
 
@@ -361,35 +386,45 @@ async def get_job(
     api_key: AuthenticatedAPIKey = Depends(require_api_key),
     session: AsyncSession = Depends(get_session),
 ) -> JobResultResponse:
-    job_cache: JobCache = app.state.job_cache
-    cached = await job_cache.get(job_id)
-    if cached is not None:
-        return JobResultResponse(**cached)
+    queue_name = settings.job.queue_name
+    with start_job_status_span(job_id, queue_name):
+        job_cache: JobCache = app.state.job_cache
+        cached = await job_cache.get(job_id)
+        if cached is not None:
+            return JobResultResponse(**cached)
 
-    job = await jobs.fetch_job(session, job_id)
-    if job is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        job = await jobs.fetch_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-    payload = jobs.serialize_job(job, settings)
-    await job_cache.set(job.id, payload)
-    return JobResultResponse(**payload)
+        payload = jobs.serialize_job(job, settings)
+        await job_cache.set(job.id, payload)
+        return JobResultResponse(**payload)
 
 
 @app.websocket("/ws/jobs/{job_id}")
 async def job_updates(websocket: WebSocket, job_id: str) -> None:
-    authenticated = await _authenticate_websocket(websocket)
-    if authenticated is None:
-        return
+    queue_name = settings.job.queue_name
+    endpoint = f"/ws/jobs/{job_id}"
+    with start_ws_span("connect", job_id, queue_name):
+        authenticated = await _authenticate_websocket(websocket)
+        if authenticated is None:
+            return
 
+    client_registered = False
     await websocket.accept()
+    ws_client_connected(endpoint)
+    client_registered = True
 
-    payload = await _load_job_payload(job_id)
-    if payload is None:
-        await websocket.send_json({"error": "job_not_found", "id": job_id})
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
-
-    await websocket.send_json(payload)
+    with start_ws_span("hydrate", job_id, queue_name):
+        payload = await _load_job_payload(job_id)
+        if payload is None:
+            await websocket.send_json({"error": "job_not_found", "id": job_id})
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            if client_registered:
+                ws_client_disconnected(endpoint)
+            return
+        await websocket.send_json(payload)
 
     redis = Redis.from_url(settings.redis.url, decode_responses=True)
     pubsub = redis.pubsub()
@@ -397,20 +432,29 @@ async def job_updates(websocket: WebSocket, job_id: str) -> None:
 
     try:
         await pubsub.subscribe(channel)
-        async for message in pubsub.listen():
-            if message.get("type") != "message":
-                continue
-            data = message.get("data")
-            if isinstance(data, (bytes, bytearray)):
-                data = data.decode("utf-8")
-            try:
-                update = json.loads(data)
-            except (TypeError, json.JSONDecodeError):
-                continue
-            await websocket.send_json(update)
+        with start_ws_span("stream", job_id, queue_name):
+            async for message in pubsub.listen():
+                if message.get("type") != "message":
+                    continue
+                data = message.get("data")
+                if isinstance(data, (bytes, bytearray)):
+                    data = data.decode("utf-8")
+                try:
+                    update = json.loads(data)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                try:
+                    await websocket.send_json(update)
+                except WebSocketDisconnect:
+                    raise
+                except Exception:  # noqa: BLE001
+                    record_ws_send_error(endpoint)
+                    raise
     except WebSocketDisconnect:
         return
     finally:
+        if client_registered:
+            ws_client_disconnected(endpoint)
         try:
             await pubsub.unsubscribe(channel)
         finally:

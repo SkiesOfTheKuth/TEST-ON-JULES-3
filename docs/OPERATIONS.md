@@ -50,8 +50,8 @@ The Compose environment now ships a full observability suite wired end-to-end:
 
 * **Tracing:** Both the FastAPI gateway and gRPC evaluator emit OpenTelemetry traces with W3C context propagation (`traceparent` header → gRPC metadata). Spans are exported to Tempo via OTLP/HTTP (`http://tempo:4318/v1/traces`).
 * **Metrics:**
-  - Gateway exposes Prometheus metrics on `:8080/metrics`, including request counters (`calculator_gateway_requests_total`), latency histograms, and a rolling gauge of rate-limit rejections per reason.
-  - Phase 2 introduces dedicated asynchronous job series: `calculator_gateway_jobs_enqueued_total`, `calculator_gateway_jobs_in_progress`, `calculator_gateway_jobs_failed_total{reason=...}`, queue depth gauge (`calculator_gateway_job_queue_depth`), worker runtime histogram (`calculator_gateway_job_task_runtime_seconds_bucket`), and queue wait histogram (`calculator_gateway_job_queue_wait_seconds_bucket`).
+  - Gateway exposes Prometheus metrics on `:8080/metrics`, including request counters (`requests_total`), latency histograms, and a rolling gauge of rate-limit rejections per reason.
+  - Phase 2 introduces asynchronous job series with shared names across gateway and workers: counters (`jobs_enqueued_total`, `jobs_failed{queue,task}`), gauges (`jobs_in_progress{queue,task}`, `queue_depth{queue}`, `ws_clients{endpoint}`), histograms (`celery_task_runtime_seconds{task}`, `job_wait_time_seconds{queue}`), and error counters (`ws_send_errors_total{endpoint}`, `job_notifications_failed_total`).
   - The evaluator publishes metrics on `:9464` covering execution duration histograms, in-flight queue depth, sandbox restart counters, and default process resource gauges.
   - Prometheus scrapes both endpoints (`observability/prometheus.yml`).
 * **Logging:** Structured JSON logs with `request_id`, `trace_id`, and `span_id` are shipped to Loki via a Promtail sidecar that tails Docker logs (`observability/promtail-config.yaml`).
@@ -59,31 +59,44 @@ The Compose environment now ships a full observability suite wired end-to-end:
 
 > Tip: `docker compose -f docker-compose.phase1.yml up --build` launches the entire stack. Grafana is reachable on `http://localhost:3000` (admin password `grafana`).
 
-## Job Management Commands
+## Job Management Command Cookbook
 
-Day-to-day asynchronous job operations rely on the Celery application defined in `services.gateway.app.task_queue`.
+The Celery application in `services.gateway.app.task_queue` underpins all asynchronous job orchestration. Keep the following commands close at hand:
 
-* Inspect active workers, registered tasks, and queue statistics:
-  ```bash
-  celery -A services.gateway.app.task_queue inspect active
-  celery -A services.gateway.app.task_queue inspect stats
-  celery -A services.gateway.app.task_queue inspect registered
-  ```
-* Monitor queue depth via Redis and Prometheus concurrently:
-  ```bash
-  celery -A services.gateway.app.task_queue inspect active_queues
-  curl -s http://localhost:8080/metrics | grep calculator_gateway_job_queue_depth
-  ```
-* Purge messages or failed retries (use sparingly and coordinate with the runbook below):
-  ```bash
-  celery -A services.gateway.app.task_queue purge
-  celery -A services.gateway.app.task_queue control discard all
-  ```
-* Scale workers horizontally:
-  ```bash
-  celery -A services.gateway.app.task_queue control add_consumer calculator-jobs -d worker@%h
-  celery -A services.gateway.app.task_queue control cancel_consumer calculator-jobs -d worker@%h
-  ```
+### Celery inspection & lifecycle
+
+```bash
+celery -A services.gateway.app.task_queue inspect active
+celery -A services.gateway.app.task_queue inspect reserved
+celery -A services.gateway.app.task_queue inspect scheduled
+celery -A services.gateway.app.task_queue inspect active_queues
+celery -A services.gateway.app.task_queue purge -Q calculator --force
+celery -A services.gateway.app.task_queue control revoke <task_id> --terminate --signal=SIGTERM
+celery -A services.gateway.app.task_queue control add_consumer calculator --destination=worker@%h
+celery -A services.gateway.app.task_queue control cancel_consumer calculator --destination=worker@%h
+```
+
+### Metrics quick checks
+
+```bash
+curl -fsS http://localhost:8080/metrics | grep jobs_enqueued_total
+curl -fsS http://localhost:8080/metrics | grep jobs_in_progress
+curl -fsS http://localhost:8080/metrics | grep queue_depth
+curl -fsS http://localhost:8080/metrics | grep job_wait_time_seconds
+```
+
+### Scaling workers
+
+```bash
+# Docker Compose (local)
+docker compose -f docker-compose.phase1.yml up --build -d --scale worker=4
+
+# Kubernetes (manifests under deploy/k8s)
+kubectl scale deployment calculator-worker --replicas=6
+kubectl autoscale deployment calculator-worker --cpu-percent=70 --min=2 --max=10
+```
+
+Combine these commands with the runbooks in `docs/runbooks/` for repeatable incident response.
 
 ## Securing Gateway ↔ Evaluator Traffic
 

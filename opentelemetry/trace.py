@@ -26,6 +26,7 @@ class _Span:
     def __init__(self) -> None:
         self.attributes: Dict[str, Any] = {}
         self.status: Optional[Status] = None
+        self.events: list[tuple[str, Dict[str, Any]]] = []
 
     def set_attribute(self, key: str, value: Any) -> None:
         self.attributes[key] = value
@@ -35,6 +36,9 @@ class _Span:
 
     def set_status(self, status: Status) -> None:
         self.status = status
+
+    def add_event(self, name: str, attributes: Optional[Dict[str, Any]] = None) -> None:
+        self.events.append((name, attributes or {}))
 
 
 @contextmanager
@@ -52,7 +56,11 @@ def get_tracer(name: str | None = None) -> _Tracer:  # noqa: ARG002 - parity wit
     return _Tracer()
 
 
+Span = _Span
+
+
 __all__ = [
+    "Span",
     "SpanKind",
     "Status",
     "StatusCode",
