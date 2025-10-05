@@ -161,6 +161,16 @@ jobs:
             -d '{"expression": "1+1"}' \
             http://localhost:8080/calculate
 
+      - name: Verify job metrics exposed
+        run: |
+          curl -fsS http://localhost:8080/metrics > /tmp/metrics.txt
+          grep -q "jobs_enqueued_total" /tmp/metrics.txt
+          grep -q "jobs_failed" /tmp/metrics.txt
+          grep -q "jobs_in_progress" /tmp/metrics.txt
+          grep -q "queue_depth" /tmp/metrics.txt
+          grep -q "celery_task_runtime_seconds" /tmp/metrics.txt
+          grep -q "job_wait_time_seconds" /tmp/metrics.txt
+
       - name: Tear down stack
         if: always()
         run: docker compose -f docker-compose.phase1.yml down --volumes

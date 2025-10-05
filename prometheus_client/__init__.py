@@ -56,6 +56,41 @@ class _Collector:
         self._values.setdefault(key, 0.0)
         return _MetricHandle(self._values, key)
 
+    def _default_handle(self) -> _MetricHandle:
+        if self.labelnames:
+            raise ValueError("Metric requires label values")
+        self._values.setdefault(tuple(), 0.0)
+        return _MetricHandle(self._values, tuple())
+
+    def inc(self, amount: float = 1.0) -> None:
+        self._default_handle().inc(amount)
+
+    def dec(self, amount: float = 1.0) -> None:
+        self._default_handle().dec(amount)
+
+    def set(self, value: float) -> None:
+        self._default_handle().set(value)
+
+    def observe(self, value: float) -> None:
+        self._default_handle().observe(value)
+
+    @property
+    def samples(self):  # pragma: no cover - compatibility shim
+        return [
+            _Sample(self.name, dict(zip(self.labelnames, labels)), value)
+            for labels, value in self._values.items()
+        ]
+
+    def collect(self):  # pragma: no cover - compatibility shim
+        return [self]
+
+
+class _Sample:
+    def __init__(self, name: str, labels: Dict[str, Any], value: float) -> None:
+        self.name = name
+        self.labels = labels
+        self.value = value
+
 
 class Counter(_Collector):
     pass
@@ -77,4 +112,24 @@ class _Registry:
 REGISTRY = _Registry()
 
 
-__all__ = ["Counter", "Gauge", "Histogram", "REGISTRY"]
+def generate_latest(registry: _Registry = REGISTRY) -> bytes:
+    lines: list[str] = []
+    for collector in registry._names_to_collectors.values():
+        lines.append(f"# HELP {collector.name} {collector.documentation}")
+        metric_type = "counter"
+        if isinstance(collector, Gauge):
+            metric_type = "gauge"
+        elif isinstance(collector, Histogram):
+            metric_type = "histogram"
+        lines.append(f"# TYPE {collector.name} {metric_type}")
+        for labels, value in collector._values.items():
+            if collector.labelnames:
+                label_parts = [f'{name}="{label}"' for name, label in zip(collector.labelnames, labels)]
+                label_str = "{" + ",".join(label_parts) + "}"
+            else:
+                label_str = ""
+            lines.append(f"{collector.name}{label_str} {value}")
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+__all__ = ["Counter", "Gauge", "Histogram", "REGISTRY", "generate_latest"]
