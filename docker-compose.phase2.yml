@@ -1,0 +1,190 @@
+version: "3.10"
+
+volumes:
+  postgres-data:
+  redis-data:
+
+networks:
+  calc-platform-net:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: calculator
+      POSTGRES_USER: calculator
+      POSTGRES_PASSWORD: calculator
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calculator"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - calc-platform-net
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - redis-data:/data
+    networks:
+      - calc-platform-net
+
+  safe-evaluator:
+    build:
+      context: .
+      dockerfile: services/safe_evaluator/Dockerfile
+    env_file:
+      - .env.development
+    networks:
+      - calc-platform-net
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    env_file:
+      - .env.development
+    environment:
+      GATEWAY_ENVIRONMENT: development
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - redis
+      - safe-evaluator
+      - tempo
+    networks:
+      - calc-platform-net
+
+  worker-standard:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    env_file:
+      - .env.development
+    command: [
+      "celery",
+      "-A",
+      "app.task_queue",
+      "worker",
+      "--loglevel=INFO",
+      "--queues",
+      "calculator-jobs"
+    ]
+    depends_on:
+      - redis
+      - postgres
+      - safe-evaluator
+    networks:
+      - calc-platform-net
+
+  worker-priority:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    env_file:
+      - .env.development
+    command: [
+      "celery",
+      "-A",
+      "app.task_queue",
+      "worker",
+      "--loglevel=INFO",
+      "--queues",
+      "calculator-jobs-heavy,calculator-jobs"
+    ]
+    depends_on:
+      - redis
+      - postgres
+      - safe-evaluator
+    networks:
+      - calc-platform-net
+
+  worker-gpu:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    env_file:
+      - .env.development
+    command: [
+      "celery",
+      "-A",
+      "app.task_queue",
+      "worker",
+      "--loglevel=INFO",
+      "--queues",
+      "calculator-jobs-gpu,calculator-jobs-heavy"
+    ]
+    depends_on:
+      - redis
+      - postgres
+      - safe-evaluator
+    networks:
+      - calc-platform-net
+
+  tempo:
+    image: grafana/tempo:2.5.0
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./observability/tempo.yaml:/etc/tempo.yaml:ro
+    networks:
+      - calc-platform-net
+
+  loki:
+    image: grafana/loki:3.2.1
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./observability/loki-config.yaml:/etc/loki/local-config.yaml:ro
+    networks:
+      - calc-platform-net
+
+  promtail:
+    image: grafana/promtail:3.2.1
+    command: ["-config.file=/etc/promtail/config.yaml"]
+    volumes:
+      - ./observability/promtail-config.yaml:/etc/promtail/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    networks:
+      - calc-platform-net
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - calc-platform-net
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: grafana
+      SLACK_WEBHOOK_URL: https://hooks.slack.com/services/replace/me
+      ALERT_EMAIL_RECIPIENTS: ops@example.com
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    networks:
+      - calc-platform-net
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro

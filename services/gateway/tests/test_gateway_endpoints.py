@@ -156,6 +156,11 @@ def gateway_test_context(monkeypatch):
     stub_instrumentation.configure_tracing = lambda settings: None
     stub_instrumentation.instrument_app = lambda app, settings: None
     stub_instrumentation.record_rate_limit_rejection = lambda reason: None
+    stub_instrumentation.get_policy_context = lambda: "unknown"
+    stub_instrumentation.set_policy_context = lambda decision: None
+    stub_instrumentation.set_queue_context = lambda queue: None
+    stub_instrumentation.set_tenant_context = lambda tenant: None
+    stub_instrumentation.record_policy_decision = lambda tenant, rule, decision: None
     sys.modules["app.instrumentation"] = stub_instrumentation
 
     stub_opentelemetry = types.ModuleType("opentelemetry")
@@ -281,42 +286,75 @@ def gateway_test_context(monkeypatch):
 
     fake_count_queued_jobs.value = 0
 
-    async def fake_create_job(session, submission, settings):
-        job_id = f"job-{len(recorded_jobs) + 1}"
-        job = SimpleNamespace(
-            id=job_id,
-            status="queued",
-            created_at=dt.datetime.utcnow(),
-            started_at=None,
-            completed_at=None,
-            priority=submission.priority,
-            tags=list(submission.tags),
-            context=submission.context,
-            input_expression=submission.input_expression,
-            result_payload=None,
-            error=None,
+async def fake_create_job(session, submission, settings, metadata=None):
+    if metadata is None:
+        metadata = SimpleNamespace(
+            tenant="test-tenant",
+            queue_name=settings.job.queue_name,
+            task_type="standard",
+            policy_snapshot={},
+            policy_violations=[],
+            policy_enforced=False,
+            estimated_runtime_ms=None,
+            assigned_priority=submission.priority,
+            requested_priority=submission.priority,
         )
-        recorded_jobs[job_id] = job
-        return job
+    job_id = f"job-{len(recorded_jobs) + 1}"
+    assigned_priority = getattr(metadata, 'assigned_priority', None)
+    job = SimpleNamespace(
+        id=job_id,
+        tenant=getattr(metadata, 'tenant', 'test-tenant'),
+        status="queued",
+        created_at=dt.datetime.utcnow(),
+        started_at=None,
+        completed_at=None,
+        priority=assigned_priority if assigned_priority is not None else submission.priority,
+        requested_priority=getattr(metadata, 'requested_priority', submission.priority),
+        tags=list(submission.tags),
+        context=submission.context,
+        input_expression=submission.input_expression,
+        result_payload=None,
+        error=None,
+        queue_name=getattr(metadata, 'queue_name', settings.job.queue_name),
+        task_type=getattr(metadata, 'task_type', 'standard'),
+        policy_snapshot=dict(getattr(metadata, 'policy_snapshot', {})),
+        policy_violations=list(getattr(metadata, 'policy_violations', [])),
+        policy_enforced=bool(getattr(metadata, 'policy_enforced', False)),
+        estimated_runtime_ms=getattr(metadata, 'estimated_runtime_ms', None),
+    )
+    recorded_jobs[job_id] = job
+    return job
 
-    def fake_serialize_job(job, settings):
-        return {
-            "id": job.id,
-            "status": job.status,
-            "created_at": job.created_at.isoformat(),
-            "started_at": job.started_at.isoformat() if job.started_at else None,
-            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
-            "priority": job.priority,
-            "tags": list(job.tags),
-            "links": {
-                "self": f"/jobs/{job.id}",
-                "poll": f"/jobs/{job.id}",
-                "result": f"/jobs/{job.id}",
-                "ws": f"/ws/jobs/{job.id}",
-            },
-            "result_payload": job.result_payload,
-            "error": job.error,
-        }
+def fake_serialize_job(job, settings):
+    return {
+        "id": job.id,
+        "tenant": job.tenant,
+        "status": job.status,
+        "created_at": job.created_at.isoformat(),
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "priority": job.priority,
+        "requested_priority": job.requested_priority,
+        "tags": list(job.tags),
+        "queue_name": job.queue_name,
+        "task_type": job.task_type,
+        "estimated_runtime_ms": job.estimated_runtime_ms,
+        "policy": {
+            "enforced": job.policy_enforced,
+            "violations": list(job.policy_violations),
+            "snapshot": dict(job.policy_snapshot),
+            "decision_reason": None,
+            "queue_decision": job.queue_name,
+        },
+        "links": {
+            "self": f"/jobs/{job.id}",
+            "poll": f"/jobs/{job.id}",
+            "result": f"/jobs/{job.id}",
+            "ws": f"/ws/jobs/{job.id}",
+        },
+        "result_payload": job.result_payload,
+        "error": job.error,
+    }
 
     async def fake_fetch_job(session, job_id):
         return recorded_jobs.get(job_id)
@@ -328,11 +366,12 @@ def gateway_test_context(monkeypatch):
 
     enqueue_calls: list[dict] = []
 
-    def fake_enqueue_job(job_id: str, trace_context=None):
-        enqueue_calls.append({"id": job_id, "trace": trace_context or {}})
+    def fake_enqueue_job(job_id: str, *, queue_name: str, trace_context=None):
+        enqueue_calls.append({"id": job_id, "queue": queue_name, "trace": trace_context or {}})
 
     monkeypatch.setattr(main, "enqueue_job", fake_enqueue_job)
 
+    print("DEBUG fixture yield")
     yield {
         "main": main,
         "schemas": schemas,
@@ -447,6 +486,7 @@ def test_submit_job_enqueues_and_caches_metadata(gateway_test_context):
     assert ctx["enqueue_job_calls"], "job dispatch should be recorded"
     job_id = ctx["enqueue_job_calls"][0]["id"]
     assert job_id == response.id
+    assert ctx["enqueue_job_calls"][0]["queue"] == main.settings.job.queue_name
     cached = asyncio.run(ctx["job_cache"].get(job_id))
     assert cached["id"] == job_id
     assert ctx["redis"].published, "job websocket notification should be emitted"

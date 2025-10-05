@@ -1,4 +1,4 @@
-name: Phase 1 CI/CD
+name: Phase 2 CI/CD
 
 on:
   push:
@@ -8,30 +8,27 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      run_load_tests:
+        description: "Run optional load tests"
+        required: false
+        default: "false"
+        type: boolean
 
 env:
-  PYTHON_VERSION: "3.10"
+  PYTHON_VERSION: "3.11"
   POETRY_VERSION: "1.8.3"
+  COMPOSE_FILE: docker-compose.phase2.yml
 
 jobs:
-  lint-and-test:
-    name: "Lint & Unit Tests (${{ matrix.display }})"
+  lint-unit:
+    name: Lint & Unit Tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - service: gateway
-            display: Gateway
-            workdir: services/gateway
-            pytest-extra: ""
-          - service: safe-evaluator
-            display: Safe Evaluator
-            workdir: services/safe_evaluator
-            pytest-extra: "../../tests"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -41,296 +38,166 @@ jobs:
       - name: Install Poetry
         run: pip install "poetry==${{ env.POETRY_VERSION }}"
 
-      - name: Install dependencies
-        run: poetry install --with dev
-        working-directory: ${{ matrix.workdir }}
+      - name: Install gateway dependencies
+        run: poetry -C services/gateway install --with dev
 
-      - name: Run ruff lint
-        run: poetry run ruff check app
-        working-directory: ${{ matrix.workdir }}
+      - name: Install safe evaluator dependencies
+        run: poetry -C services/safe_evaluator install --with dev
 
-      - name: Run unit tests with coverage
-        run: |
-          poetry run pytest ${{ matrix.pytest-extra }} --cov=app --cov-report=xml --cov-report=term-missing
-        working-directory: ${{ matrix.workdir }}
+      - name: Run lint
+        run: make lint
 
-      - name: Prepare coverage artifacts
-        run: |
-          mkdir -p artifacts/${{ matrix.service }}
-          mv ${{ matrix.workdir }}/.coverage artifacts/${{ matrix.service }}/.coverage
-          mv ${{ matrix.workdir }}/coverage.xml artifacts/${{ matrix.service }}/coverage.xml
-        shell: bash
+      - name: Run unit tests
+        run: make unit
 
-      - name: Upload coverage
+      - name: Fetch base branch
+        if: github.event_name == 'pull_request'
+        run: git fetch origin ${{ github.base_ref }} --depth=1
+
+      - name: Ensure change log updated
+        if: github.event_name == 'pull_request'
+        run: python scripts/ensure_changelog_updated.py
+
+      - name: Upload gateway coverage
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-${{ matrix.service }}
-          path: artifacts/${{ matrix.service }}
+          name: gateway-unit-coverage
+          path: services/gateway/coverage.xml
 
-  coverage-report:
-    name: Coverage Summary
-    needs: lint-and-test
+  integration:
+    name: Integration Tests
     runs-on: ubuntu-latest
-    steps:
-      - name: Download coverage artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: coverage-*
-          path: coverage
-          merge-multiple: true
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Generate combined coverage report
-        run: |
-          pip install coverage[toml]
-          find coverage -name '.coverage' -path '*gateway*' -exec cp {} .coverage.gateway \;
-          find coverage -name '.coverage' -path '*safe-evaluator*' -exec cp {} .coverage.safe-evaluator \;
-          coverage combine
-          coverage report
-          coverage xml -o coverage/combined-coverage.xml
-          coverage json -o coverage/combined-coverage.json
-          coverage report >> $GITHUB_STEP_SUMMARY
-
-      - name: Upload combined coverage artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: combined-coverage
-          path: |
-            coverage/combined-coverage.xml
-            coverage/combined-coverage.json
-
-  security-static-analysis:
-    name: Static Application Security Tests
-    needs: lint-and-test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install analysis tools
-        run: pip install bandit semgrep
-
-      - name: Run Bandit
-        run: |
-          bandit -r services/gateway/app services/safe_evaluator/app libs/calculator_core/src libs/calculator_logic/src \
-            --severity-level medium --confidence-level medium --quiet \
-            --exclude services/gateway/app/scripts/seed_api_key.py
-
-      - name: Run Semgrep
-        run: semgrep --config .semgrep.yaml services/gateway/app services/safe_evaluator/app libs
-
-  integration-tests:
-    name: Integration Smoke Tests
-    needs: lint-and-test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Start stack
-        run: docker compose -f docker-compose.phase1.yml up --build -d
-
-      - name: Wait for gateway readiness
-        run: |
-          for i in {1..30}; do
-            if curl -fsS http://localhost:8080/health/ready; then
-              exit 0
-            fi
-            sleep 5
-          done
-          docker compose -f docker-compose.phase1.yml logs
-          exit 1
-
-      - name: Seed default API key
-        run: docker compose -f docker-compose.phase1.yml exec -T gateway python -m app.scripts.seed_api_key --force
-
-      - name: Smoke test calculation endpoint
-        run: |
-          curl -fsS -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-Api-Key: calculator-local-dev-key" \
-            -d '{"expression": "1+1"}' \
-            http://localhost:8080/calculate
-
-      - name: Tear down stack
-        if: always()
-        run: docker compose -f docker-compose.phase1.yml down --volumes
-
-  docker-build:
-    name: Build & Push Images
-    needs:
-      - integration-tests
-      - security-static-analysis
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - name: gateway
-            dockerfile: services/gateway/Dockerfile
-            image: calculator/gateway
-          - name: evaluator
-            dockerfile: services/safe_evaluator/Dockerfile
-            image: calculator/evaluator
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push ${{ matrix.name }} image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          tags: |
-            ${{ matrix.image }}:phase1
-            ${{ matrix.image }}:${{ github.sha }}
-
-  trivy-scan:
-    name: Trivy Security Scan
-    needs: docker-build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.24.0
-        with:
-          scan-type: fs
-          ignore-unfixed: true
-          format: sarif
-          output: trivy-results.sarif
-
-      - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-results.sarif
-
-  sbom:
-    name: Generate SBOM
-    needs: docker-build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Generate SBOM with Syft
-        uses: anchore/sbom-action@v0
-        with:
-          path: .
-          output-file: sbom/sbom.spdx.json
-          output-format: spdx-json
-
-      - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom
-          path: sbom/sbom.spdx.json
-
-  dependabot-review:
-    name: Dependabot Dependency Review
-    needs: docker-build
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Dependency review (Dependabot)
-        uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: high
-
-  release-artifacts:
-    name: Release Artifacts
-    needs:
-      - docker-build
-      - coverage-report
-      - trivy-scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Generate SBOM with Syft
-        uses: anchore/sbom-action@v0.17.3
-        with:
-          output-file: sbom-phase1.spdx.json
-          format: spdx-json
-
-      - name: Prepare deployment documentation bundle
-        run: |
-          mkdir -p release/docs
-          cp docker-compose.phase1.yml release/docs/docker-compose.phase1.yml
-          cp .env.development release/docs/.env.development.example
-          cp .env.production release/docs/.env.production.example
-          cp .env.test release/docs/.env.test.example
-
-      - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: phase1-release-assets
-          path: |
-            sbom-phase1.spdx.json
-            release/docs
-
-  tag-release:
-    name: Tag Phase 1 Release
-    needs:
-      - release-artifacts
-      - integration-tests
-      - coverage-report
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    needs: lint-unit
+    env:
+      TEST_GATEWAY_API_KEY: ci-integration-key
+      GATEWAY_DATABASE__URL: postgresql+asyncpg://calculator:calculator@localhost:5432/calculator
+      GATEWAY_REDIS__URL: redis://localhost:6379/0
+      GATEWAY_OBSERVABILITY__OTLP_ENDPOINT: ""
+      GATEWAY_JOB__CACHE_NAMESPACE: jobs
+      GATEWAY_JOB__NOTIFICATION_NAMESPACE: job_events
+      GATEWAY_ENVIRONMENT: development
+      GATEWAY_TEST_BASE_URL: http://localhost:8080
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Determine next phase1-alpha tag
-        id: tag
-        run: |
-          git fetch --tags
-          prefix="phase1-alpha."
-          last_tag=$(git tag -l "${prefix}[0-9]*" --sort=-v:refname | head -n 1)
-          if [[ -z "$last_tag" ]]; then
-            next_tag="${prefix}1"
-          else
-            number=${last_tag##*.}
-            next_number=$((number + 1))
-            next_tag="${prefix}${next_number}"
-          fi
-          echo "next_tag=${next_tag}" >> "$GITHUB_OUTPUT"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Create and push tag
+      - name: Install Poetry
+        run: pip install "poetry==${{ env.POETRY_VERSION }}"
+
+      - name: Install gateway dependencies
+        run: poetry -C services/gateway install --with dev
+
+      - name: Install safe evaluator dependencies
+        run: poetry -C services/safe_evaluator install --with dev
+
+      - name: Launch Phase 2 stack
+        run: docker compose up --build -d postgres redis safe-evaluator worker-standard worker-priority worker-gpu gateway tempo loki promtail prometheus grafana
+
+      - name: Wait for gateway readiness
         run: |
-          git tag "${{ steps.tag.outputs.next_tag }}" "${{ github.sha }}"
-          git push origin "${{ steps.tag.outputs.next_tag }}"
+          for attempt in {1..60}; do
+            if curl -fsS http://localhost:8080/health/ready; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Gateway failed to become ready" >&2
+          exit 1
+
+      - name: Apply database migrations
+        run: poetry -C services/gateway run alembic upgrade head
+
+      - name: Seed integration API key
+        run: poetry -C services/gateway run python -m app.scripts.seed_api_key --api-key "$TEST_GATEWAY_API_KEY" --owner "CI Pipeline" --scopes calculate --force
+
+      - name: Run integration test suite
+        env:
+          PYTEST_ADDOPTS: "-m integration --maxfail=1"
+        run: poetry -C services/gateway run pytest tests/integration
+
+      - name: Collect docker logs
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down --remove-orphans -v
+
+  load-test:
+    name: Load Test (Optional)
+    runs-on: ubuntu-latest
+    needs: integration
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.run_load_tests == 'true') ||
+        (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-load-tests')) ||
+        (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      }}
+    env:
+      TEST_GATEWAY_API_KEY: ci-load-key
+      GATEWAY_DATABASE__URL: postgresql+asyncpg://calculator:calculator@localhost:5432/calculator
+      GATEWAY_REDIS__URL: redis://localhost:6379/0
+      GATEWAY_ENVIRONMENT: development
+      GATEWAY_OBSERVABILITY__OTLP_ENDPOINT: ""
+      GATEWAY_TEST_BASE_URL: http://localhost:8080
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pip install "poetry==${{ env.POETRY_VERSION }}"
+
+      - name: Install gateway dependencies
+        run: poetry -C services/gateway install --with dev
+
+      - name: Launch stack
+        run: docker compose up --build -d postgres redis safe-evaluator worker-standard worker-priority worker-gpu gateway tempo loki promtail prometheus grafana
+
+      - name: Wait for gateway readiness
+        run: |
+          for attempt in {1..60}; do
+            if curl -fsS http://localhost:8080/health/ready; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Gateway failed to become ready" >&2
+          exit 1
+
+      - name: Apply database migrations
+        run: poetry -C services/gateway run alembic upgrade head
+
+      - name: Seed API key for load test
+        run: poetry -C services/gateway run python -m app.scripts.seed_api_key --api-key "$TEST_GATEWAY_API_KEY" --owner "CI Load" --scopes calculate --force
+
+      - name: Execute Locust smoke test
+        env:
+          API_KEY: ${{ env.TEST_GATEWAY_API_KEY }}
+          HOST: http://localhost:8080
+          USERS: 25
+          SPAWN_RATE: 10
+          RUN_TIME: 3m
+        run: make load-test
+
+      - name: Collect docker logs
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down --remove-orphans -v

@@ -216,6 +216,7 @@ def test_enqueue_job_applies_signature(monkeypatch: pytest.MonkeyPatch) -> None:
             records["headers"] = headers
             records["args"] = self.args
             records["kwargs"] = self.kwargs
+            records["apply_kwargs"] = kwargs
 
     class _FakeTask:
         def s(self, *args, **kwargs):
@@ -236,4 +237,5 @@ def test_enqueue_job_applies_signature(monkeypatch: pytest.MonkeyPatch) -> None:
     assert records["s_kwargs"] == {"queue_name": default_queue, "trace_context": trace_headers}
     assert records["queue"] == default_queue
     assert records["headers"] == trace_headers
+    assert records["apply_kwargs"].get("routing_key") == default_queue
     assert metric_calls == [("enqueued", default_queue), ("refresh", default_queue)], "Metrics hooks should be invoked"
