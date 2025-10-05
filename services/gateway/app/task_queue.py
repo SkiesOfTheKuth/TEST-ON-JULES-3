@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import time
 import datetime as dt
-from typing import Any, Dict, Mapping, Optional
+import re
+import threading
+
+from typing import Any, Dict, Mapping, Optional, Coroutine
 
 from celery import Celery
 from celery.utils.log import get_task_logger
@@ -16,6 +19,8 @@ from opentelemetry.trace import Status, StatusCode
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from prometheus_client import Counter, Gauge, Histogram, REGISTRY
 
 from services.common.grpc import grpc
 from services.protos import evaluator_pb2, evaluator_pb2_grpc
@@ -37,6 +42,99 @@ task_logger = get_task_logger(__name__)
 tracer = trace.get_tracer(__name__)
 
 settings = get_settings()
+
+_METRIC_NAMESPACE = settings.observability.metrics_namespace
+
+
+def _register_metric(name: str, factory):
+    full_name = f"{_METRIC_NAMESPACE}_{name}" if _METRIC_NAMESPACE else name
+    try:
+        return factory()
+    except ValueError:
+        existing = REGISTRY._names_to_collectors.get(full_name)  # type: ignore[attr-defined]
+        if existing is None:
+            raise
+        return existing
+
+
+_JOBS_ENQUEUED = _register_metric(
+    "jobs_enqueued_total",
+    lambda: Counter(
+        "jobs_enqueued_total",
+        "Total number of asynchronous calculator jobs submitted.",
+        labelnames=("queue",),
+        namespace=_METRIC_NAMESPACE,
+    ),
+)
+_JOBS_IN_PROGRESS = _register_metric(
+    "jobs_in_progress",
+    lambda: Gauge(
+        "jobs_in_progress",
+        "Number of calculator jobs currently being processed by workers.",
+        labelnames=("queue",),
+        namespace=_METRIC_NAMESPACE,
+    ),
+)
+_JOBS_FAILED = _register_metric(
+    "jobs_failed_total",
+    lambda: Counter(
+        "jobs_failed_total",
+        "Total number of calculator jobs that ultimately failed.",
+        labelnames=("queue", "reason"),
+        namespace=_METRIC_NAMESPACE,
+    ),
+)
+_QUEUE_DEPTH = _register_metric(
+    "job_queue_depth",
+    lambda: Gauge(
+        "job_queue_depth",
+        "Depth of the Redis-backed Celery queue.",
+        labelnames=("queue",),
+        namespace=_METRIC_NAMESPACE,
+    ),
+)
+_TASK_RUNTIME = _register_metric(
+    "job_task_runtime_seconds",
+    lambda: Histogram(
+        "job_task_runtime_seconds",
+        "Histogram of worker execution runtimes by outcome.",
+        labelnames=("queue", "status"),
+        namespace=_METRIC_NAMESPACE,
+        buckets=(
+            0.01,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1.0,
+            2.5,
+            5.0,
+            10.0,
+            30.0,
+        ),
+    ),
+)
+_QUEUE_WAIT = _register_metric(
+    "job_queue_wait_seconds",
+    lambda: Histogram(
+        "job_queue_wait_seconds",
+        "Time jobs spend waiting in the queue before worker execution.",
+        labelnames=("queue",),
+        namespace=_METRIC_NAMESPACE,
+        buckets=(
+            0.01,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1.0,
+            2.5,
+            5.0,
+            10.0,
+            30.0,
+        ),
+    ),
+)
 
 celery_app = Celery("calculator-gateway")
 celery_app.conf.update(
@@ -64,6 +162,32 @@ _sync_channel = None
 _sync_stub: Optional[evaluator_pb2_grpc.EvaluatorStub] = None
 
 
+def _run_coroutine(coro: Coroutine[Any, Any, Any]):
+    """Execute a coroutine regardless of surrounding event loop state."""
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: list[Any] = []
+    error: list[BaseException] = []
+
+    def runner() -> None:
+        try:
+            result.append(asyncio.run(coro))
+        except BaseException as exc:  # noqa: BLE001
+            error.append(exc)
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join()
+
+    if error:
+        raise error[0]
+    return result[0]
+
+
 def enqueue_job(job_id: str, *, trace_context: Optional[Dict[str, str]] = None) -> None:
     """Submit a job for asynchronous execution."""
 
@@ -73,6 +197,8 @@ def enqueue_job(job_id: str, *, trace_context: Optional[Dict[str, str]] = None) 
         kwargs={"trace_context": trace_context or {}},
         queue=settings.job.queue_name,
     )
+    _record_job_enqueued()
+    _schedule_queue_depth_refresh()
 
 
 @celery_app.task(
@@ -89,7 +215,7 @@ def execute_job(self, job_id: str, trace_context: Optional[Dict[str, str]] = Non
     parent_context = extract(trace_context or {})
     token = attach(parent_context)
     try:
-        return asyncio.run(
+        return _run_coroutine(
             _execute_job(
                 job_id,
                 trace_headers=trace_context or {},
@@ -119,40 +245,95 @@ async def _execute_job(
             job = await _lock_job(session, job_id)
             if job is None:
                 task_logger.warning("Job %s not found", job_id)
+                await _refresh_queue_depth(redis)
                 return {"status": "missing"}
 
-            with tracer.start_as_current_span("worker.job", attributes={"job.id": job_id}) as span:
-                span.set_attribute("job.attempt", attempt)
-                span.set_attribute("job.max_retries", max_retries)
-                await _mark_running(session, job, cache)
+            _JOBS_IN_PROGRESS.labels(queue=settings.job.queue_name).inc()
+            try:
+                queue_depth_before = await _refresh_queue_depth(redis)
+                with tracer.start_as_current_span(
+                    "worker.job",
+                    attributes={"job.id": job_id, "job.queue_depth_start": queue_depth_before},
+                ) as span:
+                    span.set_attribute("job.attempt", attempt)
+                    span.set_attribute("job.max_retries", max_retries)
+                    queue_wait_ms = _compute_queue_wait_ms(job)
+                    if queue_wait_ms is not None:
+                        span.set_attribute("job.queue_wait_ms", queue_wait_ms)
+                        _QUEUE_WAIT.labels(queue=settings.job.queue_name).observe(queue_wait_ms / 1000.0)
 
-                try:
-                    response = await _invoke_evaluator(job, trace_headers)
-                except grpc.RpcError as exc:
-                    return await _handle_grpc_failure(
-                        session,
-                        job,
-                        cache,
-                        exc,
-                        attempt=attempt,
-                        max_retries=max_retries,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    await _mark_failed(session, job, cache, str(exc))
-                    raise JobExecutionError(str(exc)) from exc
+                    await _mark_running(session, job, cache)
 
-                result_payload = _build_result_payload(response)
-                status = STATUS_SUCCEEDED if result_payload.get("value") is not None else STATUS_FAILED
-                await _finalize_job(session, job, cache, status=status, payload=result_payload)
-                span.set_attribute("job.status", status)
-                span.set_status(Status(StatusCode.OK))
-                duration_ms = (time.perf_counter() - start_time) * 1000.0
-                span.set_attribute("job.duration_ms", duration_ms)
-                return {
-                    "status": status,
-                    "result": result_payload,
-                    "duration_ms": duration_ms,
-                }
+                    try:
+                        response = await _invoke_evaluator(job, trace_headers)
+                        result_payload = _build_result_payload(response)
+                        status = (
+                            STATUS_SUCCEEDED
+                            if result_payload.get("value") is not None
+                            else STATUS_FAILED
+                        )
+                        await _finalize_job(session, job, cache, status=status, payload=result_payload)
+                        span.set_attribute("job.status", status)
+                        span.set_status(Status(StatusCode.OK))
+                        duration_ms = (time.perf_counter() - start_time) * 1000.0
+                        span.set_attribute("job.duration_ms", duration_ms)
+                        if status == STATUS_FAILED:
+                            _record_job_failure(result_payload.get("error") or "evaluator_error")
+                        queue_depth_after = await _refresh_queue_depth(redis)
+                        span.set_attribute("job.queue_depth_end", queue_depth_after)
+                        _observe_task_runtime(status, duration_ms)
+                        return {
+                            "status": status,
+                            "result": result_payload,
+                            "duration_ms": duration_ms,
+                        }
+                    except grpc.RpcError as exc:
+                        try:
+                            return await _handle_grpc_failure(
+                                session,
+                                job,
+                                cache,
+                                exc,
+                                attempt=attempt,
+                                max_retries=max_retries,
+                            )
+                        finally:
+                            queue_depth_after = await _refresh_queue_depth(redis)
+                            span.set_attribute("job.queue_depth_end", queue_depth_after)
+                    except TransientJobError as exc:
+                        duration_ms = (time.perf_counter() - start_time) * 1000.0
+                        span.set_attribute("job.status", STATUS_QUEUED)
+                        span.set_attribute("job.duration_ms", duration_ms)
+                        span.record_exception(exc)
+                        span.set_status(Status(StatusCode.ERROR))
+                        queue_depth_after = await _refresh_queue_depth(redis)
+                        span.set_attribute("job.queue_depth_end", queue_depth_after)
+                        raise
+                    except JobExecutionError as exc:
+                        duration_ms = (time.perf_counter() - start_time) * 1000.0
+                        span.set_attribute("job.status", STATUS_FAILED)
+                        span.set_attribute("job.duration_ms", duration_ms)
+                        span.record_exception(exc)
+                        span.set_status(Status(StatusCode.ERROR))
+                        queue_depth_after = await _refresh_queue_depth(redis)
+                        span.set_attribute("job.queue_depth_end", queue_depth_after)
+                        _record_job_failure(exc)
+                        _observe_task_runtime(STATUS_FAILED, duration_ms)
+                        raise
+                    except Exception as exc:  # noqa: BLE001
+                        duration_ms = (time.perf_counter() - start_time) * 1000.0
+                        span.set_attribute("job.status", STATUS_FAILED)
+                        span.set_attribute("job.duration_ms", duration_ms)
+                        span.record_exception(exc)
+                        span.set_status(Status(StatusCode.ERROR))
+                        queue_depth_after = await _refresh_queue_depth(redis)
+                        span.set_attribute("job.queue_depth_end", queue_depth_after)
+                        _record_job_failure(exc)
+                        _observe_task_runtime(STATUS_FAILED, duration_ms)
+                        await _mark_failed(session, job, cache, str(exc))
+                        raise JobExecutionError(str(exc)) from exc
+            finally:
+                _JOBS_IN_PROGRESS.labels(queue=settings.job.queue_name).dec()
     finally:
         await redis.close()
 
@@ -266,4 +447,81 @@ def _get_sync_stub() -> evaluator_pb2_grpc.EvaluatorStub:
         _sync_channel = create_sync_channel(settings.evaluator)
         _sync_stub = evaluator_pb2_grpc.EvaluatorStub(_sync_channel)
     return _sync_stub
+
+
+def _record_job_enqueued() -> None:
+    _JOBS_ENQUEUED.labels(queue=settings.job.queue_name).inc()
+
+
+def _observe_task_runtime(status: str, duration_ms: float) -> None:
+    _TASK_RUNTIME.labels(queue=settings.job.queue_name, status=status).observe(duration_ms / 1000.0)
+
+
+def _record_job_failure(reason: Exception | str) -> None:
+    label = _normalize_failure_reason(reason)
+    _JOBS_FAILED.labels(queue=settings.job.queue_name, reason=label).inc()
+
+
+def _normalize_failure_reason(reason: Exception | str) -> str:
+    if isinstance(reason, Exception):
+        detail = str(reason).strip()
+        if detail:
+            text = detail
+        else:
+            text = reason.__class__.__name__
+    else:
+        text = str(reason).strip()
+    if not text:
+        text = "unknown"
+    sanitized = text.lower().replace(" ", "_")
+    sanitized = re.sub(r"[^a-z0-9_\-\.]+", "_", sanitized)
+    sanitized = sanitized.strip("_") or "unknown"
+    return sanitized[:64]
+
+
+def _compute_queue_wait_ms(job: Job) -> Optional[float]:
+    created_at = job.created_at
+    if not created_at:
+        return None
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=dt.timezone.utc)
+    now = dt.datetime.now(dt.timezone.utc)
+    wait_seconds = max((now - created_at).total_seconds(), 0.0)
+    return wait_seconds * 1000.0
+
+
+async def _refresh_queue_depth(redis: Redis) -> int:
+    if not hasattr(redis, "llen"):
+        return 0
+    queue_name = settings.job.queue_name
+    keys_to_check = [f"queue:{queue_name}", queue_name, f"{queue_name}-applied"]
+    depth = 0
+    for key in keys_to_check:
+        try:
+            value = await redis.llen(key)
+        except Exception:  # noqa: BLE001
+            continue
+        if value:
+            depth = int(value)
+            break
+    _QUEUE_DEPTH.labels(queue=queue_name).set(depth)
+    return depth
+
+
+def _schedule_queue_depth_refresh() -> None:
+    async def _update() -> None:
+        redis = Redis.from_url(settings.redis.url, decode_responses=True)
+        try:
+            await _refresh_queue_depth(redis)
+        except Exception as exc:  # noqa: BLE001
+            task_logger.debug("Queue depth refresh failed: %s", exc)
+        finally:
+            await redis.close()
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(_update())
+    else:
+        loop.create_task(_update())
 

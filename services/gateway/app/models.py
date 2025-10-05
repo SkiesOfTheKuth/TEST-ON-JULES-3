@@ -6,8 +6,21 @@ import datetime as dt
 from typing import Any, Dict, Optional
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy.types import JSON, TypeDecorator
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class JSONBCompat(TypeDecorator):
+    """Use PostgreSQL JSONB when available and fall back to generic JSON."""
+
+    impl = JSONB
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):  # type: ignore[override]
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(JSONB())
+        return dialect.type_descriptor(JSON())
 
 
 class Base(DeclarativeBase):
@@ -81,8 +94,8 @@ class Job(Base):
     started_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     input_expression: Mapped[str] = mapped_column(String(512), nullable=False)
-    context: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
-    result_payload: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB)
+    context: Mapped[Dict[str, Any]] = mapped_column(JSONBCompat, default=dict, nullable=False)
+    result_payload: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONBCompat)
     error: Mapped[Optional[str]] = mapped_column(Text)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    tags: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSONBCompat, default=list, nullable=False)

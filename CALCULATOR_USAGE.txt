@@ -53,6 +53,36 @@ Local Development (without Docker)
    make run-gateway
    ````
 
+Asynchronous Jobs
+-----------------
+Phase 2 adds an async job API backed by Celery and Redis. Use it for heavyweight expressions or batch workloads.
+
+1. Submit a job:
+   ````bash
+   curl -X POST http://localhost:8080/jobs \
+     -H "X-Api-Key: <your-key>" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "input_expression": "pow(2, 12) + sqrt(16)",
+           "context": {"scale": 3},
+           "priority": 1,
+           "tags": ["demo", "retryable"]
+         }'
+   ````
+   The response returns the job metadata, including polling links and WebSocket URI (`/ws/jobs/<id>`).
+2. Poll for completion:
+   ````bash
+   curl -H "X-Api-Key: <your-key>" http://localhost:8080/jobs/<job-id>
+   ````
+   Successful jobs return the cached payload; failures include the error string recorded in Postgres and Prometheus (`calculator_gateway_jobs_failed_total`).
+3. Optional: stream updates over WebSockets (requires `wscat` or similar):
+   ````bash
+   npx wscat -c ws://localhost:8080/ws/jobs/<job-id> -H "X-Api-Key: <your-key>"
+   ````
+4. Explore metrics and dashboards:
+   - `curl -s http://localhost:8080/metrics | grep calculator_gateway_job`
+   - Grafana → `Gateway Overview` → Async panels for throughput, success rate, and wait time.
+
 Testing
 -------
 Execute unit tests from the repository root:
