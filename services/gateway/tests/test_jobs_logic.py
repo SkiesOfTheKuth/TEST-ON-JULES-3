@@ -6,6 +6,8 @@ import pytest_asyncio
 from celery.result import EagerResult
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+pytest_plugins = ("pytest_asyncio.plugin",)
+
 from services.gateway.app import jobs, task_queue
 from services.gateway.app.config import GatewaySettings
 from services.gateway.app.models import Base
@@ -172,4 +174,15 @@ async def test_celery_job_lifecycle_in_eager_mode(
         result_payload = refreshed.result_payload
 
     assert result_payload["value"] == 42.0
+
+
+@pytest.mark.asyncio
+async def test_publish_job_update_emits_json(test_settings: GatewaySettings) -> None:
+    redis = _RecordingRedis()
+    payload = {"id": "job-123", "status": jobs.STATUS_RUNNING}
+
+    await jobs.publish_job_update(redis, "job-123", payload, settings=test_settings)
+
+    expected_channel = jobs.build_job_channel(test_settings, "job-123")
+    assert ("publish", expected_channel, json.dumps(payload)) in redis.events
 

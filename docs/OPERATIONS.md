@@ -179,6 +179,14 @@ Mutual TLS is optional—leave `EVALUATOR_CLIENT_CA_PATH` unset to accept TLS wi
    ```
 5. Track recovery on Grafana (`Gateway Overview → Async Job Throughput`) and via the `calculator_gateway_job_queue_depth` gauge.
 
+### WebSocket Notification Channel
+
+1. Authenticate by passing `X-Api-Key` during the WebSocket handshake. The gateway reuses the REST dependency, so local overrides from tests (e.g., dependency injection) also apply.
+2. On connect the gateway replays the cached payload (from Redis or Postgres) before streaming incremental updates published by workers. Expect the first frame to contain `status="queued"` along with polling links.
+3. Redis pub/sub channels follow `JobSettings.notification_namespace`. If notifications stall, inspect `redis-cli pubsub channels job_events:*` to confirm messages are flowing. Then verify Celery workers are still consuming the calculator queue with `celery -A services.gateway.app.task_queue inspect active_queues --destination=worker@%h`; restart any missing workers so they re-subscribe to Redis notifications.
+4. Clients should treat WebSocket disconnects as transient. Reconnect with exponential backoff and fall back to `GET /jobs/{id}` until the socket stabilizes.
+5. To smoke-test end to end, run `wscat -c ws://localhost:8080/ws/jobs/<id> -H "X-Api-Key: $API_KEY"` while submitting new jobs; observe `queued → running → succeeded` frames within a few hundred milliseconds of worker transitions.
+
 ### Clearing Failed Queue
 
 1. Quantify failures and reasons:
@@ -232,7 +240,16 @@ Mutual TLS is optional—leave `EVALUATOR_CLIENT_CA_PATH` unset to accept TLS wi
 ## Worker Scaling & Deployment
 
 1. **Horizontal scale-out:** Run multiple Celery worker replicas pinned to the `calculator-jobs` queue. Kubernetes `Deployment` or Docker Compose `scale` can be used; ensure each worker process sets `--hostname` to surface individual heartbeat metrics.
-2. **Priority lanes:** Enable tiered QoS by configuring Celery routing keys per priority level. The gateway maps the `priority` field into discrete buckets (`JobSettings.priority_levels`); provision dedicated queues (e.g., `calculator-jobs.high`, `calculator-jobs.normal`) and route via Celery's `task_routes` to guarantee latency for critical jobs.
+2. **Priority lanes:** Enable tiered QoS by configuring Celery routing keys per priority level. The gateway maps the `priority` field into discrete buckets (`JobSettings.priority_levels`); provision dedicated queues (e.g., `calculator-jobs.high`, `calculator-jobs.normal`) and route via Celery's `task_routes` to guarantee latency for critical jobs. A minimal router looks like:
+   ```python
+   celery_app.conf.task_routes = {
+       "gateway.execute_job": {
+           "queue": "calculator-jobs.high",
+           "routing_key": "calculator.jobs.high",
+       }
+   }
+   ```
+   Run latency-sensitive workers with `celery worker --queues calculator-jobs.high` and background pools against the default queue to prevent starvation.
 3. **Autoscaling guidance:** Monitor the `gateway.job.queue_depth` Prometheus metric and Celery worker heartbeats. Trigger scale-up when queue depth exceeds 75% of `JobSettings.max_queue_size` or worker CPU saturates >80% for five minutes. Scale-down once backlog clears and concurrency utilization drops below 40%.
 4. **Stateful persistence:** Postgres holds the job ledger (`jobs` table) while Redis caches in-flight/completed payloads with TTL. During deployments, drain workers gracefully (`celery -A app.task_queue control cancel_consumer`) before terminating pods to avoid losing locks on running jobs.
 5. **Disaster recovery:** Restore Postgres from point-in-time backups to recover job metadata; expired Redis entries are rehydrated from the database on demand. Document fallback procedures to manually requeue jobs via `enqueue_job` if necessary.
