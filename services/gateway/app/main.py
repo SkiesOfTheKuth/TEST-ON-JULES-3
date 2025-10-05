@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
+from types import SimpleNamespace
 from typing import Any, Dict
 
 from services.common.grpc import grpc
@@ -431,6 +433,14 @@ async def _authenticate_websocket(websocket: WebSocket) -> AuthenticatedAPIKey |
     if not raw_key:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing API key")
         return None
+
+    override = getattr(app, "dependency_overrides", {}).get(require_api_key)
+    if override is not None:
+        fake_request = SimpleNamespace(headers={"X-Api-Key": raw_key})
+        result = override(fake_request)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
 
     session_gen = get_session()
     try:

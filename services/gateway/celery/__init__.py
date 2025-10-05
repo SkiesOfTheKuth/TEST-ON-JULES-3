@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, Optional
 
 from .result import EagerResult

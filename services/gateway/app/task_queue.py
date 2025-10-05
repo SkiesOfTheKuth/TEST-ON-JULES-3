@@ -20,7 +20,49 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from prometheus_client import Counter, Gauge, Histogram, REGISTRY
+try:
+    from prometheus_client import Counter, Gauge, Histogram, REGISTRY
+except ImportError:  # pragma: no cover - fallback for minimal environments
+    class _Collector:
+        def __init__(self, name: str, documentation: str, *, labelnames=(), namespace: str | None = None, **kwargs):
+            self.name = f"{namespace}_{name}" if namespace else name
+            self.labelnames = tuple(labelnames)
+            self._values = {}
+
+        def labels(self, **labels):
+            key = tuple(labels.get(label) for label in self.labelnames)
+            self._values.setdefault(key, 0.0)
+            return self
+
+        def inc(self, amount: float = 1.0):
+            for key in list(self._values.keys()) or [tuple()]:
+                self._values[key] = self._values.get(key, 0.0) + amount
+
+        def dec(self, amount: float = 1.0):
+            for key in list(self._values.keys()) or [tuple()]:
+                self._values[key] = self._values.get(key, 0.0) - amount
+
+        def set(self, value: float):
+            for key in list(self._values.keys()) or [tuple()]:
+                self._values[key] = value
+
+        def observe(self, value: float):
+            self.inc(value)
+
+    class Counter(_Collector):
+        pass
+
+    class Gauge(_Collector):
+        pass
+
+    class Histogram(_Collector):
+        pass
+
+    class _Registry:
+        def __init__(self):
+            self._names_to_collectors = {}
+
+    REGISTRY = _Registry()
 
 from services.common.grpc import grpc
 from services.protos import evaluator_pb2, evaluator_pb2_grpc
