@@ -197,7 +197,7 @@ def instrument_app(app: FastAPI, settings: GatewaySettings) -> None:
         _FASTAPI_INSTRUMENTED = True
 
     app.add_middleware(ObservabilityMiddleware, settings=settings)
-    Instrumentator(namespace=settings.observability.metrics_namespace).instrument(app).expose(app)
+    Instrumentator().instrument(app).expose(app)
 
 
 def record_rate_limit_rejection(reason: str) -> None:
