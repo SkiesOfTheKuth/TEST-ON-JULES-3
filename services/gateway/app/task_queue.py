@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import datetime as dt
 import re
 import threading
+import time
 
-from typing import Any, Dict, Mapping, Optional, Coroutine
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Coroutine, Dict, Mapping, Optional
 
 from celery import Celery
 from celery.utils.log import get_task_logger
@@ -22,7 +21,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from prometheus_client import Counter, Gauge, Histogram, REGISTRY
-from prometheus_client import Counter, Gauge, Histogram
 
 from services.common.grpc import grpc
 from services.protos import evaluator_pb2, evaluator_pb2_grpc
@@ -35,6 +33,7 @@ from .jobs import (
     STATUS_QUEUED,
     STATUS_RUNNING,
     STATUS_SUCCEEDED,
+    publish_job_update,
     serialize_job,
 )
 from .models import Job
@@ -135,64 +134,6 @@ _QUEUE_WAIT = _register_metric(
             10.0,
             30.0,
         ),
-_JOBS_ENQUEUED = Counter(
-    "jobs_enqueued_total",
-    "Total number of asynchronous calculator jobs submitted.",
-    labelnames=("queue",),
-    namespace=_METRIC_NAMESPACE,
-)
-_JOBS_IN_PROGRESS = Gauge(
-    "jobs_in_progress",
-    "Number of calculator jobs currently being processed by workers.",
-    labelnames=("queue",),
-    namespace=_METRIC_NAMESPACE,
-)
-_JOBS_FAILED = Counter(
-    "jobs_failed_total",
-    "Total number of calculator jobs that ultimately failed.",
-    labelnames=("queue", "reason"),
-    namespace=_METRIC_NAMESPACE,
-)
-_QUEUE_DEPTH = Gauge(
-    "job_queue_depth",
-    "Depth of the Redis-backed Celery queue.",
-    labelnames=("queue",),
-    namespace=_METRIC_NAMESPACE,
-)
-_TASK_RUNTIME = Histogram(
-    "job_task_runtime_seconds",
-    "Histogram of worker execution runtimes by outcome.",
-    labelnames=("queue", "status"),
-    namespace=_METRIC_NAMESPACE,
-    buckets=(
-        0.01,
-        0.05,
-        0.1,
-        0.25,
-        0.5,
-        1.0,
-        2.5,
-        5.0,
-        10.0,
-        30.0,
-    ),
-)
-_QUEUE_WAIT = Histogram(
-    "job_queue_wait_seconds",
-    "Time jobs spend waiting in the queue before worker execution.",
-    labelnames=("queue",),
-    namespace=_METRIC_NAMESPACE,
-    buckets=(
-        0.01,
-        0.05,
-        0.1,
-        0.25,
-        0.5,
-        1.0,
-        2.5,
-        5.0,
-        10.0,
-        30.0,
     ),
 )
 
@@ -322,7 +263,7 @@ async def _execute_job(
                         span.set_attribute("job.queue_wait_ms", queue_wait_ms)
                         _QUEUE_WAIT.labels(queue=settings.job.queue_name).observe(queue_wait_ms / 1000.0)
 
-                    await _mark_running(session, job, cache)
+                    await _mark_running(session, job, cache, redis)
 
                     try:
                         response = await _invoke_evaluator(job, trace_headers)
@@ -332,7 +273,14 @@ async def _execute_job(
                             if result_payload.get("value") is not None
                             else STATUS_FAILED
                         )
-                        await _finalize_job(session, job, cache, status=status, payload=result_payload)
+                        await _finalize_job(
+                            session,
+                            job,
+                            cache,
+                            redis,
+                            status=status,
+                            payload=result_payload,
+                        )
                         span.set_attribute("job.status", status)
                         span.set_status(Status(StatusCode.OK))
                         duration_ms = (time.perf_counter() - start_time) * 1000.0
@@ -353,6 +301,7 @@ async def _execute_job(
                                 session,
                                 job,
                                 cache,
+                                redis,
                                 exc,
                                 attempt=attempt,
                                 max_retries=max_retries,
@@ -390,7 +339,7 @@ async def _execute_job(
                         span.set_attribute("job.queue_depth_end", queue_depth_after)
                         _record_job_failure(exc)
                         _observe_task_runtime(STATUS_FAILED, duration_ms)
-                        await _mark_failed(session, job, cache, str(exc))
+                        await _mark_failed(session, job, cache, redis, str(exc))
                         raise JobExecutionError(str(exc)) from exc
             finally:
                 _JOBS_IN_PROGRESS.labels(queue=settings.job.queue_name).dec()
@@ -404,13 +353,13 @@ async def _lock_job(session, job_id: str) -> Optional[Job]:
     return result.scalars().first()
 
 
-async def _mark_running(session, job: Job, cache: JobCache) -> None:
+async def _mark_running(session, job: Job, cache: JobCache, redis: Redis) -> None:
     job.status = STATUS_RUNNING
     job.started_at = dt.datetime.utcnow()
     job.completed_at = None
     job.error = None
     await session.commit()
-    await cache.set(job.id, serialize_job(job, settings))
+    await _cache_and_publish(job, cache, redis)
 
 
 async def _invoke_evaluator(job: Job, trace_headers: Mapping[str, str]):
@@ -438,6 +387,7 @@ async def _handle_grpc_failure(
     session,
     job: Job,
     cache: JobCache,
+    redis: Redis,
     exc: grpc.RpcError,
     *,
     attempt: int,
@@ -463,26 +413,27 @@ async def _handle_grpc_failure(
         job.completed_at = None
         job.error = detail
         await session.commit()
-        await cache.set(job.id, serialize_job(job, settings))
+        await _cache_and_publish(job, cache, redis)
         raise TransientJobError(detail) from exc
 
-    await _mark_failed(session, job, cache, detail)
+    await _mark_failed(session, job, cache, redis, detail)
     raise JobExecutionError(detail) from exc
 
 
-async def _mark_failed(session, job: Job, cache: JobCache, error: str) -> None:
+async def _mark_failed(session, job: Job, cache: JobCache, redis: Redis, error: str) -> None:
     job.status = STATUS_FAILED
     job.completed_at = dt.datetime.utcnow()
     job.error = error
     job.result_payload = None
     await session.commit()
-    await cache.set(job.id, serialize_job(job, settings))
+    await _cache_and_publish(job, cache, redis)
 
 
 async def _finalize_job(
     session,
     job: Job,
     cache: JobCache,
+    redis: Redis,
     *,
     status: str,
     payload: Dict[str, Any],
@@ -492,7 +443,7 @@ async def _finalize_job(
     job.result_payload = payload if status == STATUS_SUCCEEDED else None
     job.error = None if status == STATUS_SUCCEEDED else payload.get("error")
     await session.commit()
-    await cache.set(job.id, serialize_job(job, settings))
+    await _cache_and_publish(job, cache, redis)
 
 
 def _build_result_payload(response: evaluator_pb2.EvaluateResponse) -> Dict[str, Any]:
@@ -507,6 +458,13 @@ def _get_sync_stub() -> evaluator_pb2_grpc.EvaluatorStub:
         _sync_channel = create_sync_channel(settings.evaluator)
         _sync_stub = evaluator_pb2_grpc.EvaluatorStub(_sync_channel)
     return _sync_stub
+
+
+async def _cache_and_publish(job: Job, cache: JobCache, redis: Redis) -> Dict[str, Any]:
+    payload = serialize_job(job, settings)
+    await cache.set(job.id, payload)
+    await publish_job_update(redis, job.id, payload, settings=settings)
+    return payload
 
 
 def _record_job_enqueued() -> None:

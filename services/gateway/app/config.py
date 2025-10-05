@@ -61,6 +61,7 @@ class JobSettings(BaseModel):
     max_retries: int = 3
     retry_backoff_seconds: float = 2.0
     rate_namespace: str = "job_rate"
+    notification_namespace: str = "job_events"
 
 
 class GatewaySettings(BaseSettings):
