@@ -253,7 +253,7 @@ async def _execute_job(
 
                     span.set_attribute("job.status", status)
                     if status == STATUS_FAILED:
-                        _WORKER_METRICS.jobs_failed.labels(queue=queue_name, task=_TASK_NAME).inc()
+                        span.set_attribute("outcome", "failed")
                     return {
                         "status": status,
                         "result": result_payload,
@@ -275,7 +275,6 @@ async def _execute_job(
                 except JobExecutionError:
                     raise
                 except Exception as exc:  # noqa: BLE001
-                    _WORKER_METRICS.jobs_failed.labels(queue=queue_name, task=_TASK_NAME).inc()
                     await _mark_failed(session, job, cache, redis, str(exc))
                     raise JobExecutionError(str(exc)) from exc
     finally:
@@ -353,7 +352,6 @@ async def _handle_grpc_failure(
         raise TransientJobError(detail) from exc
 
     await _mark_failed(session, job, cache, redis, detail)
-    _WORKER_METRICS.jobs_failed.labels(queue=queue_name, task=_TASK_NAME).inc()
     raise JobExecutionError(detail) from exc
 
 

@@ -1,11 +1,14 @@
 from prometheus_client import REGISTRY, generate_latest
 
+from src.notifications import notifications as notification_metrics
 from src.observability.metrics import get_job_metrics
 
 
 def test_metric_collectors_registered() -> None:
     # Ensure metrics are initialised
     get_job_metrics(None)
+    notification_metrics.ws_client_connected("/test")
+    notification_metrics.ws_client_disconnected("/test")
 
     body = generate_latest(REGISTRY).decode("utf-8")
     for expected in (
