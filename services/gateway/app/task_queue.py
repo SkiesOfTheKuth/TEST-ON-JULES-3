@@ -352,7 +352,6 @@ async def _handle_grpc_failure(
         raise TransientJobError(detail) from exc
 
     await _mark_failed(session, job, cache, redis, detail)
-    _WORKER_METRICS.jobs_failed.labels(queue=queue_name, task=_TASK_NAME).inc()
     raise JobExecutionError(detail) from exc
 
 
