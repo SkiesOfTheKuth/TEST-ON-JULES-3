@@ -39,6 +39,10 @@ class _RecordingRedis:
         self.events.append(("llen", key, None))
         return 0
 
+    async def publish(self, channel: str, message: str) -> int:
+        self.events.append(("publish", channel, message))
+        return 1
+
     async def close(self) -> None:  # pragma: no cover - provided for API parity
         return None
 

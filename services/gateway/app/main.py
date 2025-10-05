@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import json
 import logging
 import time
+from types import SimpleNamespace
+from typing import Any, Dict
 
 from services.common.grpc import grpc
 from opentelemetry import trace
 from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind, Status, StatusCode
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -339,6 +343,7 @@ async def submit_job(
     job_cache: JobCache = app.state.job_cache
     job_payload = jobs.serialize_job(job, settings)
     await job_cache.set(job.id, job_payload)
+    await jobs.publish_job_update(app.state.redis, job.id, job_payload, settings=settings)
 
     trace_headers: dict[str, str] = {}
     inject(trace_headers)
@@ -370,6 +375,49 @@ async def get_job(
     return JobResultResponse(**payload)
 
 
+@app.websocket("/ws/jobs/{job_id}")
+async def job_updates(websocket: WebSocket, job_id: str) -> None:
+    authenticated = await _authenticate_websocket(websocket)
+    if authenticated is None:
+        return
+
+    await websocket.accept()
+
+    payload = await _load_job_payload(job_id)
+    if payload is None:
+        await websocket.send_json({"error": "job_not_found", "id": job_id})
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    await websocket.send_json(payload)
+
+    redis = Redis.from_url(settings.redis.url, decode_responses=True)
+    pubsub = redis.pubsub()
+    channel = jobs.build_job_channel(settings, job_id)
+
+    try:
+        await pubsub.subscribe(channel)
+        async for message in pubsub.listen():
+            if message.get("type") != "message":
+                continue
+            data = message.get("data")
+            if isinstance(data, (bytes, bytearray)):
+                data = data.decode("utf-8")
+            try:
+                update = json.loads(data)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            await websocket.send_json(update)
+    except WebSocketDisconnect:
+        return
+    finally:
+        try:
+            await pubsub.unsubscribe(channel)
+        finally:
+            await pubsub.close()
+            await redis.close()
+
+
 @app.get("/health/live")
 async def live() -> JSONResponse:
     return JSONResponse({"status": "ok"})
@@ -378,6 +426,62 @@ async def live() -> JSONResponse:
 @app.get("/health/ready")
 async def ready() -> JSONResponse:
     return JSONResponse({"status": "ready"})
+
+
+async def _authenticate_websocket(websocket: WebSocket) -> AuthenticatedAPIKey | None:
+    raw_key = websocket.headers.get("x-api-key") or websocket.headers.get("X-Api-Key")
+    if not raw_key:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing API key")
+        return None
+
+    override = getattr(app, "dependency_overrides", {}).get(require_api_key)
+    if override is not None:
+        fake_request = SimpleNamespace(headers={"X-Api-Key": raw_key})
+        result = override(fake_request)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+
+    session_gen = get_session()
+    try:
+        session = await anext(session_gen)
+    except StopAsyncIteration:  # pragma: no cover - defensive
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+        return None
+
+    try:
+        record = await get_api_key(session, raw_key)
+    finally:
+        await session_gen.aclose()
+
+    if record is None:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid API key")
+        return None
+
+    return record
+
+
+async def _load_job_payload(job_id: str) -> Dict[str, Any] | None:
+    job_cache: JobCache = app.state.job_cache
+    cached = await job_cache.get(job_id)
+    if cached is not None:
+        return cached
+
+    session_gen = get_session()
+    try:
+        session = await anext(session_gen)
+    except StopAsyncIteration:  # pragma: no cover - defensive
+        return None
+
+    try:
+        job = await jobs.fetch_job(session, job_id)
+        if job is None:
+            return None
+        payload = jobs.serialize_job(job, settings)
+        await job_cache.set(job.id, payload)
+        return payload
+    finally:
+        await session_gen.aclose()
 
 
 async def _persist_audit(

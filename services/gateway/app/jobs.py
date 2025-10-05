@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import uuid
+import json
 from typing import Any, Dict, Iterable, Optional
 
+from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,6 +81,22 @@ def build_job_links(settings: GatewaySettings, job_id: str) -> Dict[str, str]:
 
 async def write_job_cache(cache: JobCache, job: Job, settings: GatewaySettings) -> None:
     await cache.set(job.id, serialize_job(job, settings))
+
+
+def build_job_channel(settings: GatewaySettings, job_id: str) -> str:
+    namespace = settings.job.notification_namespace
+    return f"{namespace}:{job_id}" if namespace else job_id
+
+
+async def publish_job_update(
+    redis: Redis, job_id: str, payload: Dict[str, Any], *, settings: GatewaySettings
+) -> None:
+    channel = build_job_channel(settings, job_id)
+    message = json.dumps(payload)
+    try:
+        await redis.publish(channel, message)
+    except Exception:  # noqa: BLE001 - redis connection issues should not break workers
+        return
 
 
 def _deduplicate_tags(tags: Iterable[str]) -> list[str]:

@@ -4,6 +4,7 @@ import types
 from pathlib import Path
 import asyncio
 import datetime as dt
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -29,15 +30,65 @@ class StubRateLimiter:
 
 
 class StubRedis:
+    subscribers: list["StubPubSub"] = []
+
     def __init__(self):
         self.storage: dict[str, float] = {}
+        self.published: list[tuple[str, str]] = []
 
     @classmethod
     def from_url(cls, url: str, decode_responses: bool = True) -> "StubRedis":
         return cls()
 
+    async def publish(self, channel: str, message: str) -> int:
+        self.published.append((channel, message))
+        delivered = 0
+        for subscriber in list(self.__class__.subscribers):
+            delivered += await subscriber.dispatch(channel, message)
+        return delivered
+
+    def pubsub(self):
+        return StubPubSub()
+
     async def close(self) -> None:  # pragma: no cover - stub cleanup
         return None
+
+
+class StubPubSub:
+    def __init__(self):
+        self.channels: set[str] = set()
+        self.queue: asyncio.Queue = asyncio.Queue()
+        self.closed = False
+        StubRedis.subscribers.append(self)
+
+    async def subscribe(self, *channels: str) -> None:
+        self.channels.update(channels)
+
+    async def unsubscribe(self, *channels: str) -> None:
+        for channel in channels or []:
+            self.channels.discard(channel)
+
+    async def dispatch(self, channel: str, message: str) -> int:
+        if self.closed or channel not in self.channels:
+            return 0
+        await self.queue.put({"type": "message", "channel": channel, "data": message})
+        return 1
+
+    async def listen(self):
+        while not self.closed:
+            message = await self.queue.get()
+            if message is None:
+                break
+            yield message
+
+    async def close(self) -> None:
+        if not self.closed:
+            self.closed = True
+            await self.queue.put(None)
+            try:
+                StubRedis.subscribers.remove(self)
+            except ValueError:  # pragma: no cover - defensive
+                pass
 
 
 class StubCache:
@@ -97,6 +148,8 @@ def gateway_test_context(monkeypatch):
     for module in list(sys.modules):
         if module == "app" or module.startswith("app."):
             del sys.modules[module]
+
+    StubRedis.subscribers.clear()
 
     stub_instrumentation = types.ModuleType("app.instrumentation")
     stub_instrumentation.configure_logging = lambda settings: None
@@ -285,6 +338,7 @@ def gateway_test_context(monkeypatch):
         "schemas": schemas,
         "security": security,
         "app": app,
+        "redis": app.state.redis,
         "evaluator": stub_evaluator,
         "rate_limiter_key": app.state.rate_limit_key,
         "rate_limiter_ip": app.state.rate_limit_ip,
@@ -395,6 +449,7 @@ def test_submit_job_enqueues_and_caches_metadata(gateway_test_context):
     assert job_id == response.id
     cached = asyncio.run(ctx["job_cache"].get(job_id))
     assert cached["id"] == job_id
+    assert ctx["redis"].published, "job websocket notification should be emitted"
 
 
 def test_submit_job_rate_limited_returns_http_429(gateway_test_context):
@@ -451,6 +506,52 @@ def test_get_job_fetches_from_persistence_when_cache_miss(gateway_test_context):
 
     assert response.id == job.id
     assert asyncio.run(ctx["job_cache"].get(job.id)) is not None
+
+
+@pytest.mark.asyncio
+async def test_job_websocket_streams_updates(gateway_test_context):
+    ctx = gateway_test_context
+    main = ctx["main"]
+    JobSubmissionRequest = ctx["schemas"].JobSubmissionRequest
+
+    submission = JobSubmissionRequest(input_expression="6+6")
+    job = await ctx["create_job_stub"](StubSession(), submission, settings=main.settings)
+    initial_payload = main.jobs.serialize_job(job, main.settings)
+    await ctx["job_cache"].set(job.id, initial_payload)
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.headers = {"x-api-key": "valid-key"}
+            self.accepted = False
+            self.messages: list[dict] = []
+            self.closed = None
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+        async def send_json(self, message: dict) -> None:
+            self.messages.append(message)
+            if len(self.messages) >= 2:
+                raise main.WebSocketDisconnect()
+
+        async def close(self, code: int, reason: str | None = None) -> None:
+            self.closed = (code, reason)
+
+    websocket = FakeWebSocket()
+    task = asyncio.create_task(main.job_updates(websocket, job.id))
+
+    await asyncio.sleep(0)
+
+    update_payload = dict(initial_payload)
+    update_payload["status"] = "running"
+    channel = main.jobs.build_job_channel(main.settings, job.id)
+    await ctx["redis"].publish(channel, json.dumps(update_payload))
+
+    await asyncio.sleep(0)
+    await task
+
+    assert websocket.accepted is True
+    assert [msg["status"] for msg in websocket.messages] == ["queued", "running"]
 
 
 def test_quota_exceeded_returns_http_429(gateway_test_context):
