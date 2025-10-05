@@ -108,13 +108,22 @@ class _Registry:
     def __init__(self) -> None:
         self._names_to_collectors: Dict[str, _Collector] = {}
 
+    def collect(self):  # pragma: no cover - compatibility shim
+        return self._names_to_collectors.values()
+
+
+class CollectorRegistry(_Registry):
+    """Minimal CollectorRegistry implementation for local tests."""
+
+    pass
+
 
 REGISTRY = _Registry()
 
 
 def generate_latest(registry: _Registry = REGISTRY) -> bytes:
     lines: list[str] = []
-    for collector in registry._names_to_collectors.values():
+    for collector in registry.collect():
         lines.append(f"# HELP {collector.name} {collector.documentation}")
         metric_type = "counter"
         if isinstance(collector, Gauge):
@@ -132,4 +141,11 @@ def generate_latest(registry: _Registry = REGISTRY) -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
-__all__ = ["Counter", "Gauge", "Histogram", "REGISTRY", "generate_latest"]
+__all__ = [
+    "CollectorRegistry",
+    "Counter",
+    "Gauge",
+    "Histogram",
+    "REGISTRY",
+    "generate_latest",
+]

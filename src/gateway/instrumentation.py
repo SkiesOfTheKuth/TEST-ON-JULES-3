@@ -6,15 +6,18 @@ import time
 from contextlib import contextmanager
 from typing import Dict, Iterator
 
+from fastapi import FastAPI
 from opentelemetry import trace
 from opentelemetry.trace import Span
 
 from src.observability.metrics import JobMetrics, get_job_metrics
+from src.observability.prom_installer import install_prometheus_endpoint
 
 __all__ = [
     "job_id_short",
     "get_job_metrics",
     "get_gateway_metrics",
+    "expose_gateway_metrics",
     "start_enqueue_span",
     "start_job_status_span",
     "start_ws_span",
@@ -37,6 +40,12 @@ def get_gateway_metrics(namespace: str | None = None) -> JobMetrics:
     """Expose job metrics with the configured namespace."""
 
     return get_job_metrics(namespace)
+
+
+def expose_gateway_metrics(app: FastAPI, *, path: str = "/metrics") -> None:
+    """Ensure the FastAPI gateway exposes a Prometheus metrics endpoint."""
+
+    install_prometheus_endpoint(app, path=path)
 
 
 @contextmanager
@@ -88,9 +97,8 @@ def prepare_enqueue_headers(
     queue: str,
     task: str,
 ) -> Dict[str, str]:
-    """Increment gauges ahead of enqueue and return Celery headers."""
+    """Return Celery headers used for downstream queue wait calculations."""
 
-    metrics.jobs_in_progress.labels(queue=queue, task=task).inc()
     enqueued_ms = int(time.time() * 1000)
     return {"x-enqueued-at-ms": str(enqueued_ms)}
 
