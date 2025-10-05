@@ -1,0 +1,32 @@
+name: Observability Smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install poetry
+          if [ -f pyproject.toml ]; then
+            poetry export -f requirements.txt --without-hashes -o /tmp/req.txt || true
+            poetry export -f requirements.txt --with dev --without-hashes -o /tmp/dev-req.txt || true
+          fi
+          python -m pip install -r /tmp/req.txt 2>/dev/null || true
+          python -m pip install -r /tmp/dev-req.txt 2>/dev/null || true
+          python -m pip install pytest starlette fastapi prometheus_client
+      - name: Quick Check
+        run: python scripts/verify_observability.py
