@@ -77,7 +77,7 @@ def _install_safe_evaluator_stubs() -> None:
 
     exporter_module = types.ModuleType("opentelemetry.exporter")
     proto_module = types.ModuleType("opentelemetry.exporter.otlp")
-    proto_http_module = types.ModuleType("opentelemetry.exporter.otlp.proto")
+    _proto_http_module = types.ModuleType("opentelemetry.exporter.otlp.proto")
     proto_http_module_http = types.ModuleType(
         "opentelemetry.exporter.otlp.proto.http"
     )

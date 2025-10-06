@@ -16,7 +16,7 @@ for candidate in (GATEWAY_ROOT, REPO_ROOT):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from services.protos import evaluator_pb2
+from services.protos import evaluator_pb2  # noqa: E402
 
 
 class StubRateLimiter:

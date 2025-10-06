@@ -1,8 +1,6 @@
-from datetime import timedelta
-
 import pytest
 
-from services.gateway.app.autoscale import AutoscaleDecision, AutoscaleObservation, evaluate_autoscale
+from services.gateway.app.autoscale import AutoscaleObservation, evaluate_autoscale
 from services.gateway.app.config import AutoscaleSettings
 
 
