@@ -8,3 +8,6 @@ scrape_configs:
   - job_name: safe-evaluator
     static_configs:
       - targets: ['safe-evaluator:9464']
+  - job_name: symbolic-engine
+    static_configs:
+      - targets: ['symbolic:8080']

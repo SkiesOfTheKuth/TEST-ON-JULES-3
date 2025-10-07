@@ -516,8 +516,16 @@ async def _finalize_job(
 
 def _build_result_payload(response: evaluator_pb2.EvaluateResponse) -> Dict[str, Any]:
     if response.WhichOneof("result") == "error":
-        return {"error": response.error, "duration_ms": response.duration_ms}
-    return {"value": response.value, "duration_ms": response.duration_ms}
+        return {
+            "error": response.error,
+            "duration_ms": response.duration_ms,
+            "metadata": {"mode": "standard", "cache": False},
+        }
+    return {
+        "value": response.value,
+        "duration_ms": response.duration_ms,
+        "metadata": {"mode": "standard", "cache": False},
+    }
 
 
 def _get_sync_stub() -> evaluator_pb2_grpc.EvaluatorStub:

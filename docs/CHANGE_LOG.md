@@ -11,3 +11,5 @@
 | 2025-10-06 | phase2 | Add queue governance policy engine, multi-lane routing, autoscale helpers, and updated tests/docs/runbooks for Phase 2 completion. | TBA   |
 
 | 2025-10-07 | phase3-symbolic | Add symbolic engine service scaffold, sandbox runner, gRPC contract, cache migration, and documentation updates. | TBA   |
+| 2025-10-07 | phase3-symbolic | Deliver HTTP symbolic engine MVP with Redis cache, gateway integration, metrics, dashboards, and documentation/ADR updates. | TBA   |
+

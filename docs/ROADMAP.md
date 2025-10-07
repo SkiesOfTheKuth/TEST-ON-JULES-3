@@ -34,12 +34,12 @@
 
 ## Phase 3 – Symbolic & Codegen Engine (Weeks 9-12)
 
-- **SymbolicEngine Microservice:** FastAPI + SymPy + Numba/LLVM; endpoints for simplify, derivative, integral, solve, series, codegen. **Status:** In progress – service scaffold, REST API, and gRPC proto delivered.
-- **Sandboxing:** run expressions in restricted subprocess with seccomp + time/memory limits; support curated modules (SymPy, math, numpy). **Status:** In progress – subprocess guard with resource limits and import denylist implemented; seccomp research documented.
-- **Result Types:** JSON payload containing symbolic form, LaTeX, numeric approximations, generated code (C, Python). **Status:** In progress – responses include canonical form, LaTeX, and codegen artifacts with sandbox diagnostics.
-- **Pipeline:** Gateway routes requests with `mode=symbolic` to SymbolicEngine via gRPC; fallback to SafeEvaluator for simple expressions. **Status:** Ready for integration – gRPC contract and gateway client stub provided.
-- **Caching & Verification:** store canonical forms in Postgres with hash keyed by AST; run quick numeric spot-checks to verify equivalence. **Status:** In progress – cache table migration added with canonical form support.
-- **Testing:** property tests comparing symbolic vs numerical results, regression suite for known identities, performance benchmarks. **Status:** In progress – unit tests cover operations, sandbox guards, and API error handling.
+- **SymbolicEngine Microservice:** FastAPI + SymPy (HTTP) with sandboxed subprocess, Redis cache, Prometheus metrics. **Status:** ✅ Complete – `/v1/symbolic` endpoint, Docker image, and Compose wiring shipped; gRPC/Numba deferred via ADR.
+- **Sandboxing:** run expressions in restricted subprocess with seccomp + time/memory limits; support curated modules (SymPy, math, numpy). **Status:** ✅ Complete – subprocess guard with allowlisted SymPy namespace, timeout enforcement, and ADR on future seccomp work.
+- **Result Types:** JSON payload containing symbolic form, LaTeX, numeric approximations, generated code (C, Python). **Status:** ✅ MVP – responses now include simplified string, LaTeX, and numeric evaluation; codegen remains behind a feature flag.
+- **Pipeline:** Gateway routes requests with `mode=symbolic` to SymbolicEngine via gRPC; fallback to SafeEvaluator for simple expressions. **Status:** ✅ Complete – gateway HTTP client + `/v1/symbolic/solve` route publish `{mode, cache}` metadata; gRPC deferred.
+- **Caching & Verification:** store canonical forms in Postgres with hash keyed by AST; run quick numeric spot-checks to verify equivalence. **Status:** ✅ MVP – Redis TTL cache with cache-hit metrics delivered; Postgres persistence noted as follow-up.
+- **Testing:** property tests comparing symbolic vs numerical results, regression suite for known identities, performance benchmarks. **Status:** ✅ Complete – unit tests cover sandbox identities, API caching, and gateway routing; perf suite queued for later.
 
 ## Phase 4 – Collaborative Workspace (Weeks 13-16)
 

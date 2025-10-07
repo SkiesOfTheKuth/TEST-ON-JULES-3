@@ -137,26 +137,33 @@ Keep this document aligned with every platform change. Run `scripts/ensure_chang
 
 - **Install dependencies:**
   ```bash
-  poetry -C services/symbolic_engine install
+  python -m venv .venv
+  source .venv/bin/activate
+  pip install -r services/symbolic_engine/requirements.txt
   ```
 - **Run locally:**
   ```bash
-  poetry -C services/symbolic_engine run uvicorn app.main:app --reload --port 8082
+  uvicorn services.symbolic_engine.app.main:app --reload --host 0.0.0.0 --port 8080
   ```
 - **Execute unit tests:**
   ```bash
-  poetry run pytest services/symbolic_engine/tests
+  pytest tests/symbolic_engine -q
   ```
 - **Build container image:**
   ```bash
-  docker build -t symbolic_engine services/symbolic_engine
+  docker build -t symbolic services/symbolic_engine
   ```
-- **Sandbox guardrails:** Symbolic operations execute in a dedicated subprocess (`sandbox_runner`) that applies CPU and memory limits, guards suspicious tokens (`__`, `import`, `eval`, `exec`, `os`, `subprocess`), and enforces an import denylist before running SymPy. Seccomp integration is planned for a follow-up; enabling it requires loading a BPF profile (via `seccomp`/`libseccomp`) before delegating to SymPy. The profile draft lives in `docs/security/sandbox-seccomp.md` for future updates.
-- **Configuration knobs:** `SYMBOLIC_ENGINE_SANDBOX_TIMEOUT_SECONDS`, `SYMBOLIC_ENGINE_SANDBOX_MEMORY_LIMIT_MB`, and `SYMBOLIC_ENGINE_DEFAULT_CODEGEN_TARGET` tune subprocess limits and default code generation language.
-- **gRPC contract:** `services/protos/symbolic_engine.proto` defines the canonical service contract; stubs live beside the proto. Gateway integration uses `services/gateway/app/clients/symbolic.py`.
-  - `LOCUST_MIN_RPS` (default `5`) – minimum aggregate throughput.
-  - `LOCUST_MAX_FAILURE_RATIO` (default `0.05`) – acceptable failure rate.
-  Failure to meet thresholds raises an exception and exits with non-zero status.
+- **Cache operations:** results are cached in Redis for 300 seconds. Warm the cache with representative requests (see `CALCULATOR_USAGE.txt`), and flush stale entries with `redis-cli -n 0 --raw KEYS '*' | xargs -r redis-cli -n 0 DEL` when deploying new sandbox logic.
+- **Timeouts:** each symbolic evaluation runs in an isolated subprocess with a 1.5s wall-clock timeout (`SYMBOLIC_ENGINE_TIMEOUT_SECONDS`). Requests exceeding the budget return HTTP 408 with `{"ok": false, "error": "Timed out"}`.
+- **Sandbox guardrails:** the subprocess exposes an allowlisted SymPy namespace (trigonometric, exponential, rational helpers only) and clears builtins. Seccomp / gVisor hardening and Postgres persistence remain deferred (see ADR-007).
+- **Configuration knobs:**
+  - `REDIS_URL` (default `redis://redis:6379/0`) – cache backend used by the service container.
+  - `SYMBOLIC_URL` – gateway environment variable pointing at the HTTP endpoint (default `http://symbolic:8080`).
+  - `SYMBOLIC_ENGINE_TIMEOUT_SECONDS` – optional override for the subprocess timeout (default 1.5s).
+- **Observability:**
+  - Metrics exposed via `/metrics`: `sym_engine_requests_total{endpoint,ok}`, `sym_engine_latency_seconds{endpoint}`, and `sym_engine_cache_hits_total{endpoint}`.
+  - Grafana dashboard `symbolic.json` surfaces request rate, latency p95, and cache hit rate. Import under `observability/grafana/dashboards/`.
+- **Gateway integration:** the FastAPI gateway loads a shared `SymbolicEngineClient`, exposes `/v1/symbolic/solve`, and tags job/WebSocket metadata with `{"mode": "symbolic", "cache": <bool>}`. Ensure `SYMBOLIC_URL` is set in the gateway environment before deploying.
 
 ## Release Readiness Checklist
 1. Ensure CI (`Phase 2 CI/CD` workflow) is green: lint, unit, integration (with real Redis/Celery), optional load tests.

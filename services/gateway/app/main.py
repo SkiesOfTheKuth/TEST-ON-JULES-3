@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import inspect
 import json
 import logging
@@ -10,20 +11,22 @@ import time
 from types import SimpleNamespace
 from typing import Any, Dict
 
-from services.common.grpc import grpc
 from opentelemetry import trace
 from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind, Status, StatusCode
+from services.common.grpc import grpc
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.protos import evaluator_pb2, evaluator_pb2_grpc
+from services.symbolic_engine.app.schemas import SymbolicResponse
 
 from . import jobs
 from .cache import JobCache, ResultCache
-from .config import get_settings
+from .clients import SymbolicEngineClient, SymbolicEngineRequestError
+from .config import GatewaySettings, get_settings
 from .database import get_session, init_db
 from .evaluator_client import build_grpc_metadata, create_async_channel
 from .instrumentation import (
@@ -49,6 +52,7 @@ from .schemas import (
 )
 from .security import AuthenticatedAPIKey, get_api_key
 from .task_queue import enqueue_job
+from .routing.symbolic_router import router as symbolic_router
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +61,7 @@ configure_logging(settings)
 configure_tracing(settings)
 app = FastAPI(title="Calculator Gateway", version="1.0.0")
 instrument_app(app, settings)
+app.include_router(symbolic_router)
 
 tracer = trace.get_tracer(__name__)
 
@@ -104,6 +109,10 @@ async def startup_event() -> None:
     await init_db(settings)
     app.state.grpc_channel = create_async_channel(settings.evaluator)
     app.state.grpc_stub = evaluator_pb2_grpc.EvaluatorStub(app.state.grpc_channel)
+    app.state.symbolic_client = SymbolicEngineClient(
+        settings.symbolic.base_url,
+        timeout=settings.symbolic.request_timeout_seconds,
+    )
     logger.info("Gateway started on %s:%s", settings.host, settings.port)
 
 
@@ -112,6 +121,46 @@ async def shutdown_event() -> None:
     redis: Redis = app.state.redis
     await redis.close()
     await app.state.grpc_channel.close()
+    symbolic_client: SymbolicEngineClient = app.state.symbolic_client
+    await symbolic_client.aclose()
+
+
+async def _complete_symbolic_job(
+    job: jobs.Job,
+    submission: JobSubmissionRequest,
+    *,
+    session: AsyncSession,
+    cache: JobCache,
+    redis: Redis,
+    settings: GatewaySettings,
+    client: SymbolicEngineClient,
+) -> Dict[str, Any]:
+    job.started_at = dt.datetime.utcnow()
+    try:
+        response = await client.solve(submission.input_expression, submission.context or None)
+    except SymbolicEngineRequestError as exc:
+        response = SymbolicResponse(ok=False, result=None, error=str(exc))
+
+    metadata = {
+        "mode": "symbolic",
+        "cache": bool(response.result.get("cached")) if response.result else False,
+    }
+
+    job.completed_at = dt.datetime.utcnow()
+    if response.ok:
+        job.status = jobs.STATUS_SUCCEEDED
+        job.error = None
+        job.result_payload = {"result": response.result, "metadata": metadata}
+    else:
+        job.status = jobs.STATUS_FAILED
+        job.error = response.error or "symbolic_error"
+        job.result_payload = {"metadata": metadata}
+
+    await session.commit()
+    payload = jobs.serialize_job(job, settings)
+    await cache.set(job.id, payload)
+    await jobs.publish_job_update(redis, job.id, payload, settings=settings)
+    return payload
 
 
 async def require_api_key(
@@ -362,6 +411,7 @@ async def submit_job(
     session: AsyncSession = Depends(get_session),
 ) -> JobResultResponse:
     tenant = api_key.record.owner
+    mode_symbolic = payload.mode == "symbolic"
     set_tenant_context(tenant)
     set_queue_context(settings.job.queue_name)
     set_policy_context("pending")
@@ -443,10 +493,14 @@ async def submit_job(
         _record_policy("deny", "quota")
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
 
+    job_task_type = policy_decision.task_type
+    if mode_symbolic:
+        job_task_type = "symbolic"
+
     metadata = jobs.JobCreationMetadata(
         tenant=tenant,
         queue_name=policy_decision.queue_name,
-        task_type=policy_decision.task_type,
+        task_type=job_task_type,
         policy_snapshot=policy_decision.snapshot,
         policy_violations=policy_decision.violations,
         policy_enforced=policy_decision.policy_enforced,
@@ -468,6 +522,19 @@ async def submit_job(
         span.set_attribute("job.priority", job.priority)
         span.set_attribute("job.policy_enforced", policy_decision.policy_enforced)
         span.set_attribute("calculator.policy_outcome", get_policy_context())
+        span.set_attribute("job.mode", "symbolic" if mode_symbolic else "standard")
+
+    if mode_symbolic:
+        final_payload = await _complete_symbolic_job(
+            job,
+            payload,
+            session=session,
+            cache=job_cache,
+            redis=app.state.redis,
+            settings=settings,
+            client=app.state.symbolic_client,
+        )
+        return JobResultResponse(**final_payload)
 
     trace_headers: dict[str, str] = {}
     inject(trace_headers)

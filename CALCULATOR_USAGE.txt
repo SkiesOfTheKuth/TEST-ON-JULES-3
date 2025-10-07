@@ -4,10 +4,11 @@ CALCULATOR PLATFORM - PHASE 2 USAGE GUIDE
 Overview
 --------
 The calculator now operates as a production-ready, distributed platform:
-- **Gateway** – FastAPI service with synchronous `/calculate` and asynchronous `/jobs` endpoints, per-tenant policy engine, WebSocket notifications, and Celery orchestration.
-- **Safe Evaluator** – gRPC microservice performing sandboxed evaluations with strict allowlists, complexity budgets, and telemetry.
-- **Workers** – Standard, heavy, and GPU Celery lanes consuming Redis queues and publishing live status updates.
-- **Infrastructure** – Postgres (API keys, jobs, policies), Redis (broker, cache, policy store), Grafana/Prometheus/Tempo/Loki for full observability.
+- **Symbolic Engine**  FastAPI service with `/v1/symbolic` endpoint, Redis-backed cache, Prometheus metrics, and subprocess sandbox for SymPy workloads.
+- **Gateway** â€“ FastAPI service with synchronous `/calculate` and asynchronous `/jobs` endpoints, per-tenant policy engine, WebSocket notifications, and Celery orchestration.
+- **Safe Evaluator** â€“ gRPC microservice performing sandboxed evaluations with strict allowlists, complexity budgets, and telemetry.
+- **Workers** â€“ Standard, heavy, and GPU Celery lanes consuming Redis queues and publishing live status updates.
+- **Infrastructure** â€“ Postgres (API keys, jobs, policies), Redis (broker, cache, policy store), Grafana/Prometheus/Tempo/Loki for full observability.
 
 Quick Start (Docker Compose)
 ---------------------------
@@ -82,8 +83,67 @@ Asynchronous Jobs
    wscat -c ws://localhost:8080/ws/jobs/<job-id> -H "X-Api-Key: local-dev-key"
    ```
 
+Symbolic Solve API
+------------------
+1. Evaluate a symbolic expression directly via the gateway:
+   ```bash
+   curl -X POST http://localhost:8080/v1/symbolic/solve \
+     -H "X-Api-Key: local-dev-key" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "expr": "sin(x)**2 + cos(x)**2",
+           "subs": {"x": 1.0}
+         }'
+   ```
+   Sample response:
+   ```json
+   {
+     "ok": true,
+     "result": {
+       "simplified": "1",
+       "latex": "1",
+       "evaluated": 1.0,
+       "cached": false
+     },
+     "metadata": {"mode": "symbolic", "cache": false}
+   }
+   ```
+2. Dispatch a symbolic job (routes through the same service but records history):
+   ```bash
+   curl -X POST http://localhost:8080/jobs \
+     -H "X-Api-Key: local-dev-key" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "input_expression": "sin(x)**2 + cos(x)**2",
+           "context": {"x": 1.0},
+           "mode": "symbolic"
+         }'
+   ```
+   Example WebSocket payload once cached/succeeded:
+   ```json
+   {
+     "id": "<job-id>",
+     "status": "succeeded",
+     "result_payload": {
+       "result": {
+         "simplified": "1",
+         "latex": "1",
+         "evaluated": 1.0,
+         "cached": false
+       },
+       "metadata": {"mode": "symbolic", "cache": false}
+     }
+   }
+   ```
+
 Integration Testing
 -------------------
+- Spin up the minimal symbolic stack for unit tests:
+  ```bash
+  docker compose -f docker-compose.test.yml up -d redis symbolic gateway
+  pytest -q
+  docker compose -f docker-compose.test.yml down -v
+  ```
 - Bring up the full validation stack and run integration tests:
   ```bash
   make integration
@@ -106,9 +166,9 @@ Load Testing
   API_KEY=local-dev-key make load-test
   ```
 - Tunable environment variables (defaults in parentheses):
-  - `LOCUST_MAX_P95_MS` (`750`) – failure if p95 latency exceeds this value.
-  - `LOCUST_MIN_RPS` (`5`) – failure if average throughput drops below this rate.
-  - `LOCUST_MAX_FAILURE_RATIO` (`0.05`) – failure if error ratio exceeds this cap.
+  - `LOCUST_MAX_P95_MS` (`750`) â€“ failure if p95 latency exceeds this value.
+  - `LOCUST_MIN_RPS` (`5`) â€“ failure if average throughput drops below this rate.
+  - `LOCUST_MAX_FAILURE_RATIO` (`0.05`) â€“ failure if error ratio exceeds this cap.
 
 Observability
 -------------
@@ -134,7 +194,7 @@ Observability
   - **Gateway Overview** for request health, policy decision rates, and error budgets.
   - **Phase 2 Queue Lanes** for per-lane depth, enqueue throughput, autoscale events, and queue wait histograms.
   - **Worker Health** for Celery heartbeats, job failure reasons, and utilization trends.
-- Tempo traces include `calculator.queue`, `calculator.tenant`, and `calculator.policy_outcome` attributes—filter by `job.id` to debug latency.
+- Tempo traces include `calculator.queue`, `calculator.tenant`, and `calculator.policy_outcome` attributesâ€”filter by `job.id` to debug latency.
 - Runbooks: see `docs/OPERATIONS.md` for Celery worker lifecycle, Redis outage recovery, policy engine tuning, and dashboard interpretation guidance.
 
 Resilience Testing
@@ -148,9 +208,9 @@ Resilience Testing
 
 Troubleshooting
 ---------------
-- **403 policy_violation** – verify tenant policy (`tenant_policies` table) permits the requested queue/feature and clear the Redis cache key `policy:<tenant>`.
-- **503 queue full** – adjust `GATEWAY_JOB__MAX_QUEUE_SIZE`or scale workers; observe `calculator_gateway_job_queue_depth` before re-enqueueing.
-- **Evaluator errors** – check safe evaluator logs, ensure allowlist and complexity thresholds cover the expression, or adjust policy `max_runtime_ms` for long-running jobs.
+- **403 policy_violation** â€“ verify tenant policy (`tenant_policies` table) permits the requested queue/feature and clear the Redis cache key `policy:<tenant>`.
+- **503 queue full** â€“ adjust `GATEWAY_JOB__MAX_QUEUE_SIZE`or scale workers; observe `calculator_gateway_job_queue_depth` before re-enqueueing.
+- **Evaluator errors** â€“ check safe evaluator logs, ensure allowlist and complexity thresholds cover the expression, or adjust policy `max_runtime_ms` for long-running jobs.
 
 Documentation & Releases
 -------------------------

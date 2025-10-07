@@ -51,6 +51,17 @@ services:
     networks:
       - calc-platform-net
 
+  symbolic:
+    build:
+      context: .
+      dockerfile: services/symbolic_engine/Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+    networks:
+      - calc-platform-net
+
   gateway:
     build:
       context: .
@@ -59,12 +70,14 @@ services:
       - .env.development
     environment:
       GATEWAY_ENVIRONMENT: development
+      SYMBOLIC_URL: http://symbolic:8080
     ports:
       - "8080:8080"
     depends_on:
       - postgres
       - redis
       - safe-evaluator
+      - symbolic
       - tempo
     networks:
       - calc-platform-net

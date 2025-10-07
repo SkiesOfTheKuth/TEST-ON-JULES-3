@@ -1,110 +1,94 @@
-"""Sandbox execution helpers for the symbolic engine."""
+"""SymPy sandbox runner executed inside a subprocess."""
+
 from __future__ import annotations
 
-import json
-import re
-import subprocess
-import sys
-import time
-from pathlib import Path
-from typing import Any, Dict
+import multiprocessing as mp
+from typing import Dict, Optional
 
-from .config import Settings, get_settings
+import sympy as sp
 
-
-class SandboxExecutionError(RuntimeError):
-    """Raised when the sandbox cannot produce a valid result."""
-
-    def __init__(self, message: str, diagnostics: Dict[str, Any] | None = None) -> None:
-        super().__init__(message)
-        self.diagnostics = diagnostics or {}
-
-
-_SUSPICIOUS_PATTERNS = (
-    re.compile(r"__"),
-    re.compile(r"\bimport\b", re.IGNORECASE),
-    re.compile(r"\beval\b", re.IGNORECASE),
-    re.compile(r"\bexec\b", re.IGNORECASE),
-    re.compile(r"\bos\b", re.IGNORECASE),
-    re.compile(r"\bsubprocess\b", re.IGNORECASE),
-)
+_ALLOWED_NAMES = {
+    "sin": sp.sin,
+    "cos": sp.cos,
+    "tan": sp.tan,
+    "asin": sp.asin,
+    "acos": sp.acos,
+    "atan": sp.atan,
+    "log": sp.log,
+    "ln": sp.log,
+    "exp": sp.exp,
+    "sqrt": sp.sqrt,
+    "Abs": sp.Abs,
+    "E": sp.E,
+    "pi": sp.pi,
+    "Symbol": sp.Symbol,
+    "symbols": sp.symbols,
+    "Integer": sp.Integer,
+    "Rational": sp.Rational,
+}
 
 
-def _ensure_safe_payload(payload: Dict[str, Any]) -> None:
-    """Validate that user supplied strings do not contain unsafe tokens."""
-
-    for key, value in payload.items():
-        if isinstance(value, str):
-            for pattern in _SUSPICIOUS_PATTERNS:
-                if pattern.search(value):
-                    msg = f"Field '{key}' contains disallowed token for sandbox execution."
-                    raise SandboxExecutionError(msg)
-        elif isinstance(value, dict):
-            _ensure_safe_payload(value)
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                if isinstance(item, (str, dict, list, tuple)):
-                    _ensure_safe_payload({"nested": item} if not isinstance(item, str) else {"nested": item})
+class SandboxError(RuntimeError):
+    """Raised when the sandbox fails to evaluate an expression."""
 
 
-def run_operation(operation: str, payload: Dict[str, Any], settings: Settings | None = None) -> Dict[str, Any]:
-    """Execute an operation within the sandbox runner."""
+class SandboxTimeoutError(SandboxError):
+    """Raised when the sandbox process exceeds the allotted time."""
 
-    config = settings or get_settings()
-    _ensure_safe_payload(payload)
 
-    runner_module = "services.symbolic_engine.app.sandbox_runner"
-    command = [sys.executable, "-m", runner_module, operation]
+def _serialize_value(value: sp.Expr) -> Dict[str, object]:
+    simplified = sp.simplify(value)
+    payload: Dict[str, object] = {
+        "simplified": str(simplified),
+        "latex": sp.latex(simplified),
+    }
+    if simplified.free_symbols:
+        payload["evaluated"] = str(simplified)
+    else:
+        try:
+            numeric = sp.N(simplified)
+            payload["evaluated"] = float(numeric)
+        except (TypeError, ValueError):
+            payload["evaluated"] = str(simplified)
+    return payload
 
-    cwd = Path(__file__).resolve().parents[2]
-    start_time = time.monotonic()
+
+def _worker(expr: str, subs: Optional[Dict[str, float]], output: mp.Queue) -> None:
+    sandbox_globals = {"__builtins__": {}}
+    sandbox_locals = dict(_ALLOWED_NAMES)
     try:
-        completed = subprocess.run(
-            command,
-            input=json.dumps({"payload": payload, "config": config.dict()}),
-            cwd=cwd,
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=config.sandbox_timeout_seconds,
-        )
-    except subprocess.TimeoutExpired as exc:  # pragma: no cover - relies on system timing
-        raise SandboxExecutionError("Sandbox execution timed out.") from exc
+        parsed = sp.sympify(expr, locals=sandbox_locals, globals=sandbox_globals, evaluate=True)
+        simplified = sp.simplify(parsed)
+        if subs:
+            substitutions = {sp.Symbol(name): value for name, value in subs.items()}
+            evaluated = simplified.subs(substitutions)
+        else:
+            evaluated = simplified
+        payload = _serialize_value(evaluated)
+        payload.setdefault("simplified", str(simplified))
+        output.put(("ok", payload))
+    except Exception as exc:  # noqa: BLE001
+        output.put(("error", str(exc)))
 
-    runtime_ms = (time.monotonic() - start_time) * 1000
 
-    if completed.returncode != 0:
-        stderr = completed.stderr.strip()
-        raise SandboxExecutionError(
-            "Sandbox process exited with failure.",
-            diagnostics={
-                "stderr": stderr,
-                "runtime_ms": runtime_ms,
-                "return_code": completed.returncode,
-            },
-        )
+def run_sandbox(expr: str, subs: Optional[Dict[str, float]] = None, timeout_s: float = 1.5) -> Dict[str, object]:
+    """Execute a symbolic expression within a restricted subprocess."""
 
+    result_queue: mp.Queue = mp.Queue(maxsize=1)
+    process = mp.Process(target=_worker, args=(expr, subs, result_queue))
+    process.start()
+    process.join(timeout_s)
     try:
-        data = json.loads(completed.stdout or "{}")
-    except json.JSONDecodeError as exc:  # pragma: no cover - indicates runner bug
-        raise SandboxExecutionError("Failed to decode sandbox output.") from exc
-
-    if "error" in data:
-        raise SandboxExecutionError(
-            data["error"],
-            diagnostics={
-                **{k: v for k, v in data.get("diagnostics", {}).items()},
-                "runtime_ms": runtime_ms,
-            },
-        )
-
-    data.setdefault("diagnostics", {})
-    data["diagnostics"].update(
-        {
-            "runtime_ms": runtime_ms,
-            "module_allowlist": list(config.sandbox_allowed_modules),
-            "memory_limit_mb": config.sandbox_memory_limit_mb,
-            "cpu_limit_seconds": config.sandbox_cpu_time_seconds,
-        }
-    )
-    return data
+        if process.is_alive():
+            process.terminate()
+            process.join()
+            raise SandboxTimeoutError(f"Timed out after {timeout_s:.2f}s")
+        if result_queue.empty():
+            raise SandboxError("No result returned from sandbox")
+        status, payload = result_queue.get_nowait()
+        if status == "ok":
+            return payload
+        raise SandboxError(str(payload))
+    finally:
+        result_queue.close()
+        process.close()

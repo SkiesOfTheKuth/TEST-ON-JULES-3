@@ -14,11 +14,13 @@ services:
       GATEWAY_OBSERVABILITY__OTLP_ENDPOINT: http://tempo:4318/v1/traces
       GATEWAY_OBSERVABILITY__SERVICE_NAME: calculator-gateway
       GATEWAY_OBSERVABILITY__METRICS_NAMESPACE: calculator_gateway
+      SYMBOLIC_URL: http://symbolic:8080
     ports:
       - "8080:8080"
     depends_on:
       - safe-evaluator
       - redis
+      - symbolic
       - postgres
       - tempo
     networks:
@@ -78,6 +80,17 @@ services:
       - ./observability/promtail-config.yaml:/etc/promtail/config.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    networks:
+      - calc-platform-net
+
+  symbolic:
+    build:
+      context: .
+      dockerfile: services/symbolic_engine/Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
     networks:
       - calc-platform-net
 

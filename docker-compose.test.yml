@@ -1,0 +1,28 @@
+version: "3.10"
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  symbolic:
+    build:
+      context: .
+      dockerfile: services/symbolic_engine/Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    env_file:
+      - .env.test
+    environment:
+      GATEWAY_ENVIRONMENT: test
+      SYMBOLIC_URL: http://symbolic:8080
+    depends_on:
+      - redis
+      - symbolic

@@ -1,4 +1,4 @@
-﻿"""Pydantic schemas for API contracts."""
+"""Pydantic schemas for API contracts."""
 
 from __future__ import annotations
 
@@ -47,6 +47,7 @@ class JobSubmissionRequest(BaseModel):
     task_type: Optional[Literal["standard", "heavy", "gpu"]] = None
     requires_gpu: bool = False
     estimated_runtime_ms: Optional[int] = Field(default=None, ge=1)
+    mode: Literal["standard", "symbolic"] = "standard"
 
 
 class JobPolicyStatus(BaseModel):

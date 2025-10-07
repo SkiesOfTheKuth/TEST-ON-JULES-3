@@ -7,7 +7,7 @@ This repository tracks the calculator platform as it graduates from Phase 1 hard
 
 ## Delivery Status
 - **Baseline Alignment (Weeks 0-1)** – Done. Repo hygiene, migrations, auth enforcement, rate limiting, and observability scaffolding merged.
-- `services/symbolic_engine`  SymPy-powered symbolic microservice with sandboxed execution, REST API, and gRPC contract.
+- `services/symbolic_engine`  SymPy-powered symbolic microservice with sandboxed HTTP API, Redis result cache, and Prometheus metrics.
 - **Phase 1 – Hardened Core Services (Weeks 2-4)** – Ongoing. Gateway/evaluator split ships with traces, metrics, and sandboxing. Outstanding: chaos/fuzz/load coverage and remaining sandbox hardening tasks.
 - **Phase 2 – Distributed Compute Backbone (Weeks 5-8)** – Complete. Celery orchestrator, heavy/GPU lanes, tenant policies, autoscaling runbooks, Grafana dashboards, and CI/CD validation are live.
 - **Phases 3-6** – Not started; roadmap items tracked in documentation.
@@ -32,6 +32,7 @@ This repository tracks the calculator platform as it graduates from Phase 1 hard
 
 ## Repo Map
 - `services/gateway` – FastAPI gateway, Celery orchestration, policy engine, tests (unit + integration), scripts.
+- `services/symbolic_engine` – FastAPI service running SymPy workloads in a subprocess sandbox with Redis caching and `/v1/symbolic` endpoint.
 - `services/safe_evaluator` – Sandbox service, allowlist management, telemetry.
 - `libs/` – Shared calculator logic packages consumed by the gateway/evaluator.
 - `docs/` – Roadmap, operations, security, architecture, maintenance guide.

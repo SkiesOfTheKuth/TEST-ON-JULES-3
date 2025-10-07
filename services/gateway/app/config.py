@@ -38,6 +38,11 @@ class EvaluatorSettings(BaseModel):
     client_key_path: Optional[Path] = None
 
 
+class SymbolicSettings(BaseModel):
+    base_url: str = Field(default_factory=lambda: os.getenv("SYMBOLIC_URL", "http://symbolic:8080"))
+    request_timeout_seconds: float = 2.0
+
+
 class ObservabilitySettings(BaseModel):
     service_name: str = "calculator-gateway"
     otlp_endpoint: Optional[str] = None
@@ -114,6 +119,7 @@ class GatewaySettings(BaseSettings):
     redis: RedisSettings = RedisSettings()
     database: DatabaseSettings = DatabaseSettings()
     evaluator: EvaluatorSettings = EvaluatorSettings()
+    symbolic: SymbolicSettings = SymbolicSettings()
     observability: ObservabilitySettings = ObservabilitySettings()
     quota: QuotaSettings = QuotaSettings()
     job: JobSettings = JobSettings()
