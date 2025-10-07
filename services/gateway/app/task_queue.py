@@ -71,6 +71,7 @@ from .cache import JobCache, SymbolicResultCache
 from .config import get_settings
 from .evaluator_client import build_grpc_metadata, create_sync_channel
 from .symbolic_client import SymbolicEngineClient, SymbolicEngineError
+from .time_utils import utcnow
 from .jobs import (
     STATUS_FAILED,
     STATUS_QUEUED,
@@ -78,7 +79,6 @@ from .jobs import (
     STATUS_SUCCEEDED,
     publish_job_update,
     serialize_job,
-    symbolic_request_to_payload,
     upsert_symbolic_cache,
 )
 from .models import Job
@@ -463,7 +463,7 @@ async def _lock_job(session, job_id: str) -> Optional[Job]:
 
 async def _mark_running(session, job: Job, cache: JobCache, redis: Redis) -> None:
     job.status = STATUS_RUNNING
-    job.started_at = dt.datetime.utcnow()
+    job.started_at = utcnow()
     job.completed_at = None
     job.error = None
     await session.commit()
@@ -532,7 +532,7 @@ async def _handle_grpc_failure(
 
 async def _mark_failed(session, job: Job, cache: JobCache, redis: Redis, error: str) -> None:
     job.status = STATUS_FAILED
-    job.completed_at = dt.datetime.utcnow()
+    job.completed_at = utcnow()
     job.error = error
     job.result_payload = None
     await session.commit()
@@ -549,7 +549,7 @@ async def _finalize_job(
     payload: Dict[str, Any],
 ) -> None:
     job.status = status
-    job.completed_at = dt.datetime.utcnow()
+    job.completed_at = utcnow()
     job.result_payload = payload if status == STATUS_SUCCEEDED else None
     job.error = None if status == STATUS_SUCCEEDED else payload.get("error")
     await session.commit()

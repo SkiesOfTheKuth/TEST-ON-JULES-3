@@ -3,6 +3,7 @@
 | Date       | Area        | Summary                                                              | Links |
 |------------|-------------|----------------------------------------------------------------------|-------|
 | 2025-10-07 | phase3 | Harden symbolic submission (Redis cache init, rate limiter fallback, quota txn fix, compose smoke) | TBA   |
+| 2025-10-07 | phase3 | Replace naive utc timestamps with timezone-aware helper; compose smoke validated symbolic job flow. | TBA   |
 | 2025-10-05 | documentation | Add documentation maintenance guide, agent checklist, roadmap cross-links, project status README. | TBA   |
 | 2025-10-05 | phase2 | Replace stub dependency packages with real FastAPI/Celery/Redis stack, update tests, docs, and usage instructions for production jobs. | TBA   |
 | 2025-10-05 | ci-cd | Add phase 2 integration tests, load thresholds, changelog enforcement, docs/usage/runbook refresh, docker-compose GPU worker. | TBA   |

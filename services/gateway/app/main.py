@@ -8,7 +8,7 @@ import json
 import logging
 import time
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from services.common.grpc import grpc
 from opentelemetry import trace

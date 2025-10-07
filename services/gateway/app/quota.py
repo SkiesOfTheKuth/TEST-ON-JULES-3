@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Quota
+from .time_utils import utcnow
 
 
 class QuotaExceededError(RuntimeError):
@@ -27,7 +28,7 @@ async def consume_quota(session: AsyncSession, api_key_id: int, config: QuotaCon
     if config.limit <= 0:
         return
 
-    now = dt.datetime.utcnow()
+    now = utcnow()
     window_seconds = max(config.window_seconds, 1)
 
     tx = session.get_transaction()

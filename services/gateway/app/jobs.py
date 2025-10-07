@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import uuid
 import hashlib
-import datetime as dt
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional
 
@@ -13,6 +12,7 @@ from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .time_utils import utcnow
 from .cache import JobCache
 from .config import GatewaySettings
 from .models import Job, SymbolicCacheEntry
@@ -97,7 +97,7 @@ async def create_job(
         estimated_runtime_ms=metadata.estimated_runtime_ms,
     )
     if metadata.initial_status != STATUS_QUEUED:
-        now = dt.datetime.utcnow()
+        now = utcnow()
         job.started_at = now
         job.completed_at = now
     session.add(job)
@@ -234,7 +234,7 @@ async def upsert_symbolic_cache(
     verification_error: Optional[str],
 ) -> SymbolicCacheEntry:
     entry = await fetch_symbolic_cache_entry(session, cache_key)
-    timestamp = dt.datetime.utcnow()
+    timestamp = utcnow()
     if entry is None:
         entry = SymbolicCacheEntry(
             expression_hash=cache_key,

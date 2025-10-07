@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+
+from .time_utils import utcnow
 from typing import Any, Dict, Optional
 
 from sqlalchemy import (
@@ -44,7 +46,7 @@ class APIKey(Base):
     key_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     owner: Mapped[str] = mapped_column(String(255), nullable=False)
     scopes: Mapped[str] = mapped_column(String(255), default="calculate")
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=dt.datetime.utcnow)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -67,7 +69,7 @@ class RequestAudit(Base):
     client_ip: Mapped[str] = mapped_column(String(64), nullable=False)
     outcome: Mapped[str] = mapped_column(String(32), nullable=False)
     latency_ms: Mapped[float] = mapped_column(Float, nullable=False)
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=dt.datetime.utcnow)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Quota(Base):
@@ -106,11 +108,11 @@ class TenantPolicy(Base):
     allow_symbolic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     quota_limit: Mapped[Optional[int]] = mapped_column(Integer)
     quota_window_seconds: Mapped[Optional[int]] = mapped_column(Integer)
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=dt.datetime.utcnow, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True),
-        default=dt.datetime.utcnow,
-        onupdate=dt.datetime.utcnow,
+        default=utcnow,
+        onupdate=utcnow,
         nullable=False,
     )
 
@@ -129,7 +131,7 @@ class Job(Base):
     tenant: Mapped[str] = mapped_column(String(255), nullable=False, default="default")
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
-        DateTime(timezone=True), default=dt.datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=utcnow, nullable=False
     )
     started_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
@@ -166,5 +168,5 @@ class SymbolicCacheEntry(Base):
     result_payload: Mapped[Dict[str, Any]] = mapped_column(JSONBCompat, nullable=False, default=dict)
     verification_passed: Mapped[Optional[bool]] = mapped_column(Boolean)
     verification_error: Mapped[Optional[str]] = mapped_column(String(255))
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=dt.datetime.utcnow, nullable=False)
-    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)

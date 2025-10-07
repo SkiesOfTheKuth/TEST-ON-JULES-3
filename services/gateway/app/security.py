@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import hashlib
 from dataclasses import dataclass
 from typing import Optional
@@ -11,6 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import APIKey
+from .time_utils import utcnow
+
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,6 @@ async def get_api_key(session: AsyncSession, raw_key: str) -> Optional[Authentic
         return None
     if not api_key.active:
         return None
-    if api_key.expires_at and api_key.expires_at < dt.datetime.utcnow():
+    if api_key.expires_at and api_key.expires_at < utcnow():
         return None
     return AuthenticatedAPIKey(record=api_key, raw_key=raw_key)

@@ -1,14 +1,16 @@
-import sys
-import importlib
-import types
-from pathlib import Path
 import asyncio
-import datetime as dt
+import importlib
 import json
+import sys
+from pathlib import Path
+import types
 from types import SimpleNamespace
 
-import pytest
 from http import HTTPStatus
+
+import pytest
+
+from app.time_utils import utcnow
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GATEWAY_ROOT = Path(__file__).resolve().parents[1]
@@ -353,7 +355,7 @@ def gateway_test_context(monkeypatch):
             id=job_id,
             tenant=getattr(metadata, 'tenant', 'test-tenant'),
             status="queued",
-            created_at=dt.datetime.utcnow(),
+            created_at=utcnow(),
             started_at=None,
             completed_at=None,
             priority=assigned_priority if assigned_priority is not None else submission.priority,
