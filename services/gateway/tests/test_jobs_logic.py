@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from services.gateway.app import jobs, task_queue
 from services.gateway.app.config import GatewaySettings
 from services.gateway.app.models import Base
-from services.gateway.app.schemas import JobSubmissionRequest
+from services.gateway.app.schemas import JobSubmissionRequest, SymbolicJobRequest, SymbolicOperation
 from services.protos import evaluator_pb2
 
 
@@ -239,3 +239,63 @@ def test_enqueue_job_applies_signature(monkeypatch: pytest.MonkeyPatch) -> None:
     assert records["headers"] == trace_headers
     assert records["apply_kwargs"].get("routing_key") == default_queue
     assert metric_calls == [("enqueued", default_queue), ("refresh", default_queue)], "Metrics hooks should be invoked"
+
+
+
+def test_symbolic_request_payload_round_trip() -> None:
+    request = SymbolicJobRequest(operation=SymbolicOperation.SIMPLIFY, expression="x**2 + 1")
+    payload = jobs.symbolic_request_to_payload(request)
+    assert payload["operation"] == "simplify"
+    assert payload["expression"] == "x**2 + 1"
+
+
+def test_symbolic_cache_key_depends_on_tenant() -> None:
+    request = SymbolicJobRequest(operation=SymbolicOperation.SIMPLIFY, expression="x")
+    key_a = jobs.build_symbolic_cache_key("tenant-a", request)
+    key_b = jobs.build_symbolic_cache_key("tenant-b", request)
+    assert key_a != key_b
+
+
+@pytest.mark.asyncio
+async def test_create_job_symbolic_initial_success(engine, test_settings: GatewaySettings) -> None:
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as session:
+        submission = JobSubmissionRequest(
+            input_expression="x**2 + 1",
+            context={},
+            priority=0,
+            tags=[],
+            mode="symbolic",
+            symbolic=SymbolicJobRequest(operation=SymbolicOperation.SIMPLIFY, expression="x**2 + 1"),
+        )
+        symbolic_payload = jobs.symbolic_request_to_payload(submission.symbolic)
+        metadata = jobs.JobCreationMetadata(
+            tenant="symbolic-tenant",
+            queue_name=test_settings.job.queue_name,
+            task_type="symbolic",
+            policy_snapshot={},
+            policy_violations=[],
+            policy_enforced=False,
+            estimated_runtime_ms=None,
+            mode="symbolic",
+            symbolic_payload=symbolic_payload,
+            symbolic_cache_key="cache-key",
+            requested_priority=submission.priority,
+            initial_status=jobs.STATUS_SUCCEEDED,
+            initial_result={
+                "result": {"canonical": "x**2 + 1"},
+                "metadata": {"verification": {"passed": True, "error": None}},
+            },
+            verification_passed=True,
+            verification_error=None,
+        )
+        job = await jobs.create_job(session, submission, settings=test_settings, metadata=metadata)
+        assert job.status == jobs.STATUS_SUCCEEDED
+        assert job.mode == "symbolic"
+        assert job.symbolic_payload == symbolic_payload
+        assert job.verification_passed is True
+        assert job.started_at is not None and job.completed_at is not None
+        payload = jobs.serialize_job(job, test_settings)
+        assert payload["mode"] == "symbolic"
+        assert payload["symbolic_request"] == symbolic_payload
+        assert payload["verification_passed"] is True

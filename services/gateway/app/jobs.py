@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import uuid
+import hashlib
+import datetime as dt
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional
 
@@ -13,8 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .cache import JobCache
 from .config import GatewaySettings
-from .models import Job
-from .schemas import JobPolicyStatus, JobResultResponse, JobSubmissionRequest
+from .models import Job, SymbolicCacheEntry
+from .schemas import JobPolicyStatus, JobResultResponse, JobSubmissionRequest, SymbolicJobRequest
 
 STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
@@ -31,8 +33,16 @@ class JobCreationMetadata:
     policy_violations: list[str]
     policy_enforced: bool
     estimated_runtime_ms: Optional[int]
+    mode: str = "arithmetic"
+    symbolic_payload: Optional[Dict[str, Any]] = None
+    symbolic_cache_key: Optional[str] = None
     assigned_priority: Optional[int] = None
     requested_priority: Optional[int] = None
+    initial_status: str = STATUS_QUEUED
+    initial_result: Optional[Dict[str, Any]] = None
+    initial_error: Optional[str] = None
+    verification_passed: Optional[bool] = None
+    verification_error: Optional[str] = None
 
 
 def normalize_priority(priority: int, *, levels: int) -> int:
@@ -66,21 +76,30 @@ async def create_job(
     job = Job(
         id=str(uuid.uuid4()),
         tenant=metadata.tenant,
-        status=STATUS_QUEUED,
+        status=metadata.initial_status,
         input_expression=submission.input_expression,
         context=submission.context,
-        result_payload=None,
-        error=None,
+        result_payload=metadata.initial_result,
+        error=metadata.initial_error,
         requested_priority=requested_priority,
         priority=normalized_priority,
         tags=_deduplicate_tags(submission.tags),
         queue_name=metadata.queue_name,
         task_type=metadata.task_type,
+        mode=metadata.mode,
+        symbolic_payload=metadata.symbolic_payload,
+        symbolic_cache_key=metadata.symbolic_cache_key,
+        verification_passed=metadata.verification_passed,
+        verification_error=metadata.verification_error,
         policy_snapshot=dict(metadata.policy_snapshot),
         policy_violations=list(metadata.policy_violations),
         policy_enforced=bool(metadata.policy_enforced),
         estimated_runtime_ms=metadata.estimated_runtime_ms,
     )
+    if metadata.initial_status != STATUS_QUEUED:
+        now = dt.datetime.utcnow()
+        job.started_at = now
+        job.completed_at = now
     session.add(job)
     await session.commit()
     await session.refresh(job)
@@ -106,6 +125,11 @@ def serialize_job(job: Job, settings: GatewaySettings, *, include_links: bool = 
         tags=job.tags,
         queue_name=job.queue_name,
         task_type=job.task_type,
+        mode=job.mode,
+        symbolic_cache_key=job.symbolic_cache_key,
+        symbolic_request=job.symbolic_payload,
+        verification_passed=job.verification_passed,
+        verification_error=job.verification_error,
         estimated_runtime_ms=job.estimated_runtime_ms,
         policy=JobPolicyStatus(
             enforced=job.policy_enforced,
@@ -168,3 +192,66 @@ def _deduplicate_tags(tags: Iterable[str]) -> list[str]:
     return normalized
 
 
+
+def symbolic_request_to_payload(request: SymbolicJobRequest | Dict[str, Any] | None) -> Dict[str, Any]:
+    if request is None:
+        return {}
+    if isinstance(request, SymbolicJobRequest):
+        return request.model_dump(mode="json", exclude_none=True)
+    if isinstance(request, dict):
+        return request
+    raise TypeError(f"Unsupported symbolic request type: {type(request)!r}")
+
+
+def build_symbolic_cache_key(tenant: str, request: SymbolicJobRequest) -> str:
+    payload = symbolic_request_to_payload(request)
+    digest = hashlib.sha256()
+    digest.update(tenant.encode("utf-8"))
+    digest.update(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    return digest.hexdigest()
+
+
+async def fetch_symbolic_cache_entry(session: AsyncSession, cache_key: str) -> Optional[SymbolicCacheEntry]:
+    stmt = select(SymbolicCacheEntry).where(SymbolicCacheEntry.expression_hash == cache_key)
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
+async def load_symbolic_cache(session: AsyncSession, cache_key: str) -> Optional[Dict[str, Any]]:
+    entry = await fetch_symbolic_cache_entry(session, cache_key)
+    if entry is None:
+        return None
+    return entry.result_payload
+
+
+async def upsert_symbolic_cache(
+    session: AsyncSession,
+    *,
+    cache_key: str,
+    request_payload: Dict[str, Any],
+    result_payload: Dict[str, Any],
+    verification_passed: Optional[bool],
+    verification_error: Optional[str],
+) -> SymbolicCacheEntry:
+    entry = await fetch_symbolic_cache_entry(session, cache_key)
+    timestamp = dt.datetime.utcnow()
+    if entry is None:
+        entry = SymbolicCacheEntry(
+            expression_hash=cache_key,
+            request_payload=request_payload,
+            result_payload=result_payload,
+            verification_passed=verification_passed,
+            verification_error=verification_error,
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
+        session.add(entry)
+    else:
+        entry.request_payload = request_payload
+        entry.result_payload = result_payload
+        entry.verification_passed = verification_passed
+        entry.verification_error = verification_error
+        entry.updated_at = timestamp
+    await session.commit()
+    await session.refresh(entry)
+    return entry

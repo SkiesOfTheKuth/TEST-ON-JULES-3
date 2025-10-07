@@ -157,3 +157,53 @@ Documentation & Releases
 - Update this file, `docs/OPERATIONS.md`, and `docs/CHANGE_LOG.md` whenever behavior, endpoints, policies, or runbooks change.
 - CI enforces changelog updates through `scripts/ensure_changelog_updated.py`. Run it locally before submitting a pull request if unsure.
 - Include Grafana exports under `observability/grafana/dashboards/` for new panels or alerts.
+
+## Symbolic Jobs (Phase 3)
+
+Asynchronous symbolic workloads use the same `/jobs` endpoint with `mode="symbolic"` and a structured payload. Example:
+
+```bash
+curl -X POST http://localhost:8080/jobs       -H "X-Api-Key: local-dev-key"       -H "Content-Type: application/json"       -d '{
+        "mode": "symbolic",
+        "symbolic": {
+          "operation": "simplify",
+          "expression": "x**2 + 2*x + 1",
+          "context": {
+            "variables": {"x": 3}
+          },
+          "codegen": {
+            "targets": ["python", "c"],
+            "human_readable": true
+          }
+        },
+        "tags": ["symbolic", "demo"],
+        "priority": 1
+      }'
+```
+
+Response payload mirrors the symbolic service, augmented with verification metadata:
+
+```json
+{
+  "result": {
+    "canonical": "(x + 1)**2",
+    "latex": "\left(x + 1\right)^{2}",
+    "approx_value": 16.0,
+    "code": {
+      "python": "(x + 1)**2",
+      "c": "pow(x + 1, 2)"
+    },
+    "series_terms": null
+  },
+  "metadata": {
+    "execution_ms": 3.4,
+    "used_numba": false,
+    "warnings": [],
+    "verification": {"passed": true, "error": null}
+  }
+}
+```
+
+Symbolic jobs are cached by tenant + request hash. Cache hits return immediately with status `succeeded` and `from_cache=true` in the job payload. Use `/jobs/{id}` or the WebSocket channel for status updates as usual.
+
+Queue routing: the policy engine resolves symbolic submissions to `calculator-jobs-symbolic`. Ensure tenant policies set `"allow_symbolic": true` (default) or override allowed queues if necessary.

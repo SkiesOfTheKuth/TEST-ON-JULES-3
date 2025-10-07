@@ -102,6 +102,22 @@ class StubCache:
         self.storage[key] = value
 
 
+class StubSymbolicClient:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def compute(self, payload: dict) -> dict:
+        self.calls.append(payload)
+        return {"result": {"canonical": payload.get("expression", "")}, "metadata": {}}
+
+    def compute_sync(self, payload: dict) -> dict:
+        self.calls.append(payload)
+        return {"result": {"canonical": payload.get("expression", "")}, "metadata": {}}
+
+    async def aclose(self) -> None:
+        return None
+
+
 class StubJobCache:
     def __init__(self):
         self.storage: dict[str, dict] = {}
@@ -297,6 +313,8 @@ def gateway_test_context(monkeypatch):
     app.state.redis = StubRedis.from_url("redis://test")
     app.state.cache = StubCache()
     app.state.job_cache = StubJobCache()
+    app.state.symbolic_cache = StubJobCache()
+    app.state.symbolic_client = StubSymbolicClient()
     app.state.rate_limit_key = StubRateLimiter()
     app.state.rate_limit_ip = StubRateLimiter()
     app.state.job_rate_limit_key = StubRateLimiter()
@@ -323,6 +341,11 @@ def gateway_test_context(monkeypatch):
                 estimated_runtime_ms=None,
                 assigned_priority=submission.priority,
                 requested_priority=submission.priority,
+                mode=getattr(submission, "mode", "arithmetic"),
+                symbolic_payload=getattr(submission, "symbolic", None),
+                symbolic_cache_key=None,
+                verification_passed=None,
+                verification_error=None,
             )
         job_id = f"job-{len(recorded_jobs) + 1}"
         assigned_priority = getattr(metadata, 'assigned_priority', None)
@@ -342,6 +365,11 @@ def gateway_test_context(monkeypatch):
             error=None,
             queue_name=getattr(metadata, 'queue_name', main.settings.job.queue_name),
             task_type=getattr(metadata, 'task_type', 'standard'),
+            mode=getattr(metadata, 'mode', 'arithmetic'),
+            symbolic_payload=getattr(metadata, 'symbolic_payload', None),
+            symbolic_cache_key=getattr(metadata, 'symbolic_cache_key', None),
+            verification_passed=getattr(metadata, 'verification_passed', None),
+            verification_error=getattr(metadata, 'verification_error', None),
             policy_snapshot=dict(getattr(metadata, 'policy_snapshot', {})),
             policy_violations=list(getattr(metadata, 'policy_violations', [])),
             policy_enforced=bool(getattr(metadata, 'policy_enforced', False)),
@@ -363,6 +391,11 @@ def gateway_test_context(monkeypatch):
             "tags": list(job.tags),
             "queue_name": job.queue_name,
             "task_type": job.task_type,
+            "mode": getattr(job, "mode", "arithmetic"),
+            "symbolic_cache_key": getattr(job, "symbolic_cache_key", None),
+            "symbolic_request": getattr(job, "symbolic_payload", None),
+            "verification_passed": getattr(job, "verification_passed", None),
+            "verification_error": getattr(job, "verification_error", None),
             "estimated_runtime_ms": job.estimated_runtime_ms,
             "policy": {
                 "enforced": job.policy_enforced,

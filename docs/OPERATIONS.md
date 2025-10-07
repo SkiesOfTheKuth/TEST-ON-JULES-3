@@ -150,3 +150,15 @@
 - **Evaluator saturation:** traces will show `evaluator_error` or `resource_exhausted`. Scale evaluator replicas or adjust policy `max_runtime_ms`. Gateway returns HTTP 429 for rate-limited calls and 503 if queues exceed `max_queue_size`.
 
 Keep this document aligned with every platform change. Run `scripts/ensure_changelog_updated.py` locally if unsure whether a changelog entry is required.
+## Symbolic Engine Service (Phase 3)
+- **Service path:** `services/symbolic_engine` (Poetry project with FastAPI + SymPy).
+- **Local run:** `poetry -C services/symbolic_engine run uvicorn app.main:app --reload --port 8100`.
+- **Health check:** `curl http://localhost:8100/healthz` returns `{"status": "ok"}`.
+- **Sandbox guard:** execution occurs in a separate process with configurable timeout (`SYMBOLIC_SANDBOX_TIMEOUT_SECONDS`) and soft memory ceiling (`SYMBOLIC_SANDBOX_MEMORY_MB`). On Linux the Docker entrypoint enforces `RLIMIT_AS`; on Windows the guard relies on process termination after timeout (see runbook appendix for tightening with Job Objects).
+- **Allowed functions:** extend via `SYMBOLIC_ALLOWED_FUNCTIONS=sin,cos,...` (comma-separated). Unknown SymPy attributes are ignored.
+- **Tracing:** set `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, and `OTEL_RESOURCE_ATTRIBUTES` to emit spans/metrics when running alongside the observability stack.
+- **Testing:** `poetry -C services/symbolic_engine run pytest` now runs unit/API/sandbox coverage. Gateway unit tests exercise symbolic cache and job serialization.
+- **Docker build:** `docker build -t calculator-symbolic-engine services/symbolic_engine` produces the runtime image used in CI/compose.
+- **Gateway integration:** Submit jobs with `mode="symbolic"`; the policy engine routes to `calculator-jobs-symbolic`, applies tenant `allow_symbolic` flags, and records verification metadata. Cached results (Redis + Postgres) short-circuit repeat requests.
+- **Verification & caching:** workers record numeric spot-checks when variables permit. Cached payloads live in `symbolic_cache_entries` and Redis namespace `symbolic:*` with TTL configured via `GATEWAY_SYMBOLIC__CACHE_TTL_SECONDS`.
+- **Dashboards:** Grafana dashboard `phase3-symbolic.json` tracks queue depth and runtime percentiles. Extend or import via provisioning when deploying.

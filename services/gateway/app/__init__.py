@@ -13,3 +13,4 @@ def __getattr__(name: str) -> Any:
         module = import_module(".main", __name__)
         return module.app
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+from .symbolic_client import SymbolicEngineClient  # noqa: F401

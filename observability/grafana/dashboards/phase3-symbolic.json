@@ -1,0 +1,28 @@
+{
+  "title": "Phase 3 - Symbolic Engine",
+  "panels": [
+    {
+      "title": "Symbolic Queue Depth",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "calculator_gateway_job_queue_depth{queue=\"calculator-jobs-symbolic\"}",
+          "legendFormat": "queue depth",
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "title": "Symbolic Job Runtime",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(calculator_gateway_job_task_runtime_seconds_bucket{queue=\"calculator-jobs-symbolic\"}[5m])))",
+          "legendFormat": "p95 runtime",
+          "interval": ""
+        }
+      ]
+    }
+  ],
+  "description": "Symbolic queue and runtime metrics for calculator gateway"
+}

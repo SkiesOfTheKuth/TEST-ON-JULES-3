@@ -149,8 +149,9 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
             route = request.scope.get("route")
             if route and getattr(route, "path", None):
                 endpoint = route.path  # type: ignore[assignment]
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             duration = time.perf_counter() - start_time
+            logger.exception("Request failed", exc_info=exc)
             _observe_request(request, endpoint, status_code, duration)
             raise
         else:

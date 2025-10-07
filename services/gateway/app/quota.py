@@ -30,7 +30,10 @@ async def consume_quota(session: AsyncSession, api_key_id: int, config: QuotaCon
     now = dt.datetime.utcnow()
     window_seconds = max(config.window_seconds, 1)
 
-    async with session.begin():
+    tx = session.get_transaction()
+    context = session.begin_nested if tx is not None else session.begin
+
+    async with context():
         stmt = (
             select(Quota)
             .where(

@@ -51,6 +51,19 @@ services:
     networks:
       - calc-platform-net
 
+  symbolic-engine:
+    build:
+      context: .
+      dockerfile: services/symbolic_engine/Dockerfile
+    env_file:
+      - .env.development
+    environment:
+      PYTHONUNBUFFERED: '1'
+    ports:
+      - "8100:8100"
+    networks:
+      - calc-platform-net
+
   gateway:
     build:
       context: .
@@ -65,6 +78,7 @@ services:
       - postgres
       - redis
       - safe-evaluator
+      - symbolic-engine
       - tempo
     networks:
       - calc-platform-net
@@ -110,6 +124,29 @@ services:
       - redis
       - postgres
       - safe-evaluator
+    networks:
+      - calc-platform-net
+
+  worker-symbolic:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    env_file:
+      - .env.development
+    command: [
+      "celery",
+      "-A",
+      "app.task_queue",
+      "worker",
+      "--loglevel=INFO",
+      "--queues",
+      "calculator-jobs-symbolic"
+    ]
+    depends_on:
+      - redis
+      - postgres
+      - safe-evaluator
+      - symbolic-engine
     networks:
       - calc-platform-net
 

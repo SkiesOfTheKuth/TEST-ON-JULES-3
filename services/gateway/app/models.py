@@ -103,6 +103,7 @@ class TenantPolicy(Base):
     banned_patterns: Mapped[list[str]] = mapped_column(JSONBCompat, nullable=False, default=list)
     allow_heavy: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     allow_gpu: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    allow_symbolic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     quota_limit: Mapped[Optional[int]] = mapped_column(Integer)
     quota_window_seconds: Mapped[Optional[int]] = mapped_column(Integer)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=dt.datetime.utcnow, nullable=False)
@@ -141,8 +142,29 @@ class Job(Base):
     tags: Mapped[list[str]] = mapped_column(JSONBCompat, default=list, nullable=False)
     queue_name: Mapped[str] = mapped_column(String(128), nullable=False, default="calculator-jobs")
     task_type: Mapped[str] = mapped_column(String(32), nullable=False, default="standard")
+    mode: Mapped[str] = mapped_column(String(32), nullable=False, default="arithmetic")
+    symbolic_payload: Mapped[Dict[str, Any] | None] = mapped_column(JSONBCompat)
+    symbolic_cache_key: Mapped[Optional[str]] = mapped_column(String(128))
+    verification_passed: Mapped[Optional[bool]] = mapped_column(Boolean)
+    verification_error: Mapped[Optional[str]] = mapped_column(String(255))
     policy_snapshot: Mapped[Dict[str, Any]] = mapped_column(JSONBCompat, default=dict, nullable=False)
     policy_violations: Mapped[list[str]] = mapped_column(JSONBCompat, default=list, nullable=False)
     policy_enforced: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     estimated_runtime_ms: Mapped[Optional[int]] = mapped_column(Integer)
 
+
+
+class SymbolicCacheEntry(Base):
+    __tablename__ = "symbolic_cache_entries"
+    __table_args__ = (
+        Index("ix_symbolic_cache_expression_hash", "expression_hash", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    expression_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    request_payload: Mapped[Dict[str, Any]] = mapped_column(JSONBCompat, nullable=False, default=dict)
+    result_payload: Mapped[Dict[str, Any]] = mapped_column(JSONBCompat, nullable=False, default=dict)
+    verification_passed: Mapped[Optional[bool]] = mapped_column(Boolean)
+    verification_error: Mapped[Optional[str]] = mapped_column(String(255))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=dt.datetime.utcnow, nullable=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow, nullable=False)

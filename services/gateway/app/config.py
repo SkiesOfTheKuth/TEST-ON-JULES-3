@@ -1,4 +1,4 @@
-﻿"""Configuration for the gateway service."""
+"""Configuration for the gateway service."""
 
 from __future__ import annotations
 
@@ -38,6 +38,17 @@ class EvaluatorSettings(BaseModel):
     client_key_path: Optional[Path] = None
 
 
+class SymbolicEngineSettings(BaseModel):
+    base_url: str = "http://symbolic-engine:8100"
+    request_timeout_seconds: float = 10.0
+    cache_namespace: str = "symbolic"
+    cache_ttl_seconds: int = 3600
+    verification_enabled: bool = True
+    verification_timeout_ms: int = 250
+    verification_samples: int = 1
+
+
+
 class ObservabilitySettings(BaseModel):
     service_name: str = "calculator-gateway"
     otlp_endpoint: Optional[str] = None
@@ -57,6 +68,7 @@ class JobSettings(BaseModel):
     queue_name: str = "calculator-jobs"
     heavy_queue_name: str = "calculator-jobs-heavy"
     gpu_queue_name: str = "calculator-jobs-gpu"
+    symbolic_queue_name: str = "calculator-jobs-symbolic"
     cache_namespace: str = "jobs"
     rate_limit_requests: int = 5
     rate_limit_window_seconds: int = 1
@@ -83,6 +95,7 @@ class JobSettings(BaseModel):
     )
     heavy_tags: list[str] = Field(default_factory=lambda: ["heavy", "batch", "long-running"])
     gpu_tags: list[str] = Field(default_factory=lambda: ["gpu", "cuda", "accelerate"])
+    symbolic_tags: list[str] = Field(default_factory=lambda: ["symbolic", "sympy"])
 
 
 
@@ -115,6 +128,7 @@ class GatewaySettings(BaseSettings):
     database: DatabaseSettings = DatabaseSettings()
     evaluator: EvaluatorSettings = EvaluatorSettings()
     observability: ObservabilitySettings = ObservabilitySettings()
+    symbolic: SymbolicEngineSettings = SymbolicEngineSettings()
     quota: QuotaSettings = QuotaSettings()
     job: JobSettings = JobSettings()
     autoscale: AutoscaleSettings = AutoscaleSettings()

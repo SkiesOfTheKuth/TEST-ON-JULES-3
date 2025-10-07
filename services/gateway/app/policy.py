@@ -209,6 +209,7 @@ def _queue_map(settings: GatewaySettings) -> Dict[str, str]:
         "standard": settings.job.queue_name,
         "heavy": settings.job.heavy_queue_name,
         "gpu": settings.job.gpu_queue_name,
+        "symbolic": settings.job.symbolic_queue_name,
     }
 
 
@@ -229,7 +230,7 @@ def _classify_lane(
     reasons: list[str] = []
     if submission.task_type:
         lane = submission.task_type.lower()
-        if lane in {"standard", "heavy", "gpu"}:
+        if lane in {"standard", "heavy", "gpu", "symbolic"}:
             reasons.append("task_type_hint")
             return lane, reasons
         reasons.append("invalid_task_type")
@@ -341,6 +342,7 @@ def _policy_record_to_dict(record: TenantPolicy, queue_map: Dict[str, str]) -> D
         "banned_patterns": list(record.banned_patterns or []),
         "allow_heavy": record.allow_heavy,
         "allow_gpu": record.allow_gpu,
+        "allow_symbolic": record.allow_symbolic,
         "quota_limit": record.quota_limit,
         "quota_window_seconds": record.quota_window_seconds,
     }
@@ -356,6 +358,7 @@ def _default_policy(queue_map: Dict[str, str], settings: GatewaySettings) -> Dic
         "banned_patterns": [],
         "allow_heavy": True,
         "allow_gpu": False,
+        "allow_symbolic": True,
         "quota_limit": settings.quota.limit,
         "quota_window_seconds": settings.quota.window_seconds,
     }

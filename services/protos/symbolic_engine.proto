@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package calculator.symbolic;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/wrappers.proto";
+
+enum SymbolicOperation {
+  SYMBOLIC_OPERATION_SIMPLIFY = 0;
+  SYMBOLIC_OPERATION_DERIVATIVE = 1;
+  SYMBOLIC_OPERATION_INTEGRAL = 2;
+  SYMBOLIC_OPERATION_SOLVE = 3;
+  SYMBOLIC_OPERATION_SERIES = 4;
+  SYMBOLIC_OPERATION_CODEGEN = 5;
+}
+
+message SymbolicContext {
+  map<string, google.protobuf.Value> variables = 1;
+  map<string, google.protobuf.Value> parameters = 2;
+}
+
+message CodegenOptions {
+  repeated string targets = 1;
+  bool human_readable = 2;
+}
+
+message SymbolicComputeRequest {
+  SymbolicOperation operation = 1;
+  string expression = 2;
+  string variable = 3;
+  int32 order = 4;
+  SymbolicContext context = 5;
+  CodegenOptions codegen = 6;
+}
+
+message SymbolicResult {
+  string canonical = 1;
+  string latex = 2;
+  google.protobuf.DoubleValue approx_value = 3;
+  map<string, string> code = 4;
+  repeated string series_terms = 5;
+}
+
+message SymbolicMetadata {
+  double execution_ms = 1;
+  bool used_numba = 2;
+  repeated string warnings = 3;
+}
+
+message SymbolicComputeResponse {
+  SymbolicResult result = 1;
+  SymbolicMetadata metadata = 2;
+}
+
+service SymbolicEngine {
+  rpc Compute(SymbolicComputeRequest) returns (SymbolicComputeResponse);
+}

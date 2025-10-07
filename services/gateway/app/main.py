@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from services.protos import evaluator_pb2, evaluator_pb2_grpc
 
 from . import jobs
-from .cache import JobCache, ResultCache
+from .cache import JobCache, ResultCache, SymbolicResultCache
 from .config import get_settings
 from .database import get_session, init_db
 from .evaluator_client import build_grpc_metadata, create_async_channel
@@ -74,6 +74,11 @@ async def startup_event() -> None:
         app.state.redis,
         settings.job.default_ttl_seconds,
         namespace=settings.job.cache_namespace,
+    )
+    app.state.symbolic_cache = SymbolicResultCache(
+        app.state.redis,
+        settings.symbolic.cache_ttl_seconds,
+        namespace=settings.symbolic.cache_namespace,
     )
     rate_counter_ttl = settings.redis.rate_counter_ttl_seconds
     app.state.rate_limit_key = RateLimiter(
@@ -362,14 +367,16 @@ async def submit_job(
     session: AsyncSession = Depends(get_session),
 ) -> JobResultResponse:
     tenant = api_key.record.owner
+    initial_queue = settings.job.symbolic_queue_name if payload.mode == "symbolic" else settings.job.queue_name
     set_tenant_context(tenant)
-    set_queue_context(settings.job.queue_name)
+    set_queue_context(initial_queue)
     set_policy_context("pending")
     root_span = trace.get_current_span()
     if root_span and root_span.is_recording():
         root_span.set_attribute("calculator.tenant", tenant)
-        root_span.set_attribute("calculator.queue", settings.job.queue_name)
+        root_span.set_attribute("calculator.queue", initial_queue)
         root_span.set_attribute("calculator.policy_outcome", "pending")
+        root_span.set_attribute("job.mode", payload.mode)
 
     def _record_policy(decision: str, rule: str) -> None:
         record_policy_decision(tenant=tenant, rule=rule, decision=decision)
@@ -381,7 +388,16 @@ async def submit_job(
             root_span.set_attribute("calculator.policy_outcome", decision)
 
     api_key_id = api_key.record.id
-    job_rate_limiter: RateLimiter = app.state.job_rate_limit_key
+    job_rate_limiter: RateLimiter | None = getattr(app.state, 'job_rate_limit_key', None)
+    if job_rate_limiter is None:
+        job_rate_limiter = RateLimiter(
+            app.state.redis,
+            settings.job.rate_limit_requests,
+            settings.job.rate_limit_window_seconds,
+            settings.job.rate_namespace,
+            ttl_seconds=settings.redis.rate_counter_ttl_seconds,
+        )
+        app.state.job_rate_limit_key = job_rate_limiter
     if not await job_rate_limiter.allow(str(api_key_id)):
         record_rate_limit_rejection("job_api_key")
         _record_policy("deny", "job_rate_limit")
@@ -398,6 +414,23 @@ async def submit_job(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Job queue is full",
             )
+
+    symbolic_request = payload.symbolic if payload.mode == "symbolic" else None
+    symbolic_payload = jobs.symbolic_request_to_payload(symbolic_request)
+    symbolic_cache_key = jobs.build_symbolic_cache_key(tenant, symbolic_request) if symbolic_request else None
+    cached_symbolic_result: Dict[str, Any] | None = None
+    verification_passed: Optional[bool] = None
+    verification_error: Optional[str] = None
+
+    if symbolic_request is not None and symbolic_cache_key is not None:
+        cached_symbolic_result = await jobs.load_symbolic_cache(session, symbolic_cache_key)
+        if cached_symbolic_result is None:
+            cached_symbolic_result = await app.state.symbolic_cache.get(symbolic_cache_key)
+        if cached_symbolic_result:
+            verification_info = cached_symbolic_result.get("metadata", {}).get("verification")
+            if isinstance(verification_info, dict):
+                verification_passed = verification_info.get("passed")
+                verification_error = verification_info.get("error")
 
     policy_decision = await evaluate_job_policy(
         session,
@@ -451,9 +484,21 @@ async def submit_job(
         policy_violations=policy_decision.violations,
         policy_enforced=policy_decision.policy_enforced,
         estimated_runtime_ms=policy_decision.estimated_runtime_ms,
+        mode=payload.mode,
+        symbolic_payload=symbolic_payload,
+        symbolic_cache_key=symbolic_cache_key,
         assigned_priority=policy_decision.normalized_priority,
         requested_priority=policy_decision.requested_priority,
+        verification_passed=verification_passed,
+        verification_error=verification_error,
     )
+
+    should_enqueue = True
+    if payload.mode == "symbolic" and symbolic_cache_key and cached_symbolic_result is not None:
+        metadata.initial_status = jobs.STATUS_SUCCEEDED
+        metadata.initial_result = cached_symbolic_result
+        metadata.initial_error = None
+        should_enqueue = False
 
     job = await jobs.create_job(session, payload, settings=settings, metadata=metadata)
     job_cache: JobCache = app.state.job_cache
@@ -461,29 +506,37 @@ async def submit_job(
     await job_cache.set(job.id, job_payload)
     await jobs.publish_job_update(app.state.redis, job.id, job_payload, settings=settings)
 
+    if payload.mode == "symbolic" and symbolic_cache_key and cached_symbolic_result is not None:
+        await app.state.symbolic_cache.set(symbolic_cache_key, cached_symbolic_result)
+
     span = trace.get_current_span()
-    if span.is_recording():
+    if span and span.is_recording():
         span.set_attribute("job.queue_name", job.queue_name)
         span.set_attribute("job.task_type", job.task_type)
         span.set_attribute("job.priority", job.priority)
         span.set_attribute("job.policy_enforced", policy_decision.policy_enforced)
         span.set_attribute("calculator.policy_outcome", get_policy_context())
+        span.set_attribute("job.mode", job.mode)
+        if not should_enqueue:
+            span.set_attribute("job.cache_hit", True)
 
-    trace_headers: dict[str, str] = {}
-    inject(trace_headers)
-    request_id = getattr(request.state, "request_id", None)
-    if request_id:
-        trace_headers.setdefault("x-request-id", request_id)
-    trace_headers["calculator-tenant"] = tenant
-    trace_headers["calculator-queue"] = job.queue_name
-    trace_headers["calculator-policy"] = get_policy_context()
-    trace_headers["calculator-task-type"] = job.task_type
-    trace_headers["calculator-priority"] = str(job.priority)
-
-    enqueue_job(job.id, queue_name=policy_decision.queue_name, trace_context=trace_headers)
+    if should_enqueue:
+        trace_headers: dict[str, str] = {}
+        inject(trace_headers)
+        request_id = getattr(request.state, "request_id", None)
+        if request_id:
+            trace_headers.setdefault("x-request-id", request_id)
+        trace_headers["calculator-tenant"] = tenant
+        trace_headers["calculator-queue"] = job.queue_name
+        trace_headers["calculator-policy"] = get_policy_context()
+        trace_headers["calculator-task-type"] = job.task_type
+        trace_headers["calculator-priority"] = str(job.priority)
+        trace_headers["calculator-mode"] = job.mode
+        if job.symbolic_cache_key:
+            trace_headers["calculator-symbolic-cache"] = job.symbolic_cache_key
+        enqueue_job(job.id, queue_name=policy_decision.queue_name, trace_context=trace_headers)
 
     return JobResultResponse(**job_payload)
-
 
 @app.get("/jobs/{job_id}", response_model=JobResultResponse)
 async def get_job(

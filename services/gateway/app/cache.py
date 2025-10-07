@@ -69,3 +69,37 @@ class JobCache:
 
     def _format_key(self, job_id: str) -> str:
         return f"{self._namespace}:{job_id}"
+
+class SymbolicResultCache:
+    """Cache for symbolic results to short-circuit repeat requests."""
+
+    def __init__(self, redis: Redis, ttl_seconds: int, namespace: str = "symbolic") -> None:
+        self._redis = redis
+        self._ttl = ttl_seconds
+        self._namespace = namespace
+
+    async def get(self, cache_key: str) -> Optional[Dict[str, Any]]:
+        raw = await self._redis.get(self._format_key(cache_key))
+        if raw is None:
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return payload
+
+    async def set(self, cache_key: str, payload: Dict[str, Any]) -> None:
+        serialized = json.dumps(payload)
+        key = self._format_key(cache_key)
+        if self._ttl > 0:
+            await self._redis.set(key, serialized, ex=self._ttl)
+        else:
+            await self._redis.set(key, serialized)
+
+    async def delete(self, cache_key: str) -> None:
+        await self._redis.delete(self._format_key(cache_key))
+
+    def _format_key(self, cache_key: str) -> str:
+        return f"{self._namespace}:{cache_key}"

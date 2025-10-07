@@ -67,9 +67,10 @@ except ImportError:  # pragma: no cover - fallback for minimal environments
 from services.common.grpc import grpc
 from services.protos import evaluator_pb2, evaluator_pb2_grpc
 
-from .cache import JobCache
+from .cache import JobCache, SymbolicResultCache
 from .config import get_settings
 from .evaluator_client import build_grpc_metadata, create_sync_channel
+from .symbolic_client import SymbolicEngineClient, SymbolicEngineError
 from .jobs import (
     STATUS_FAILED,
     STATUS_QUEUED,
@@ -77,6 +78,8 @@ from .jobs import (
     STATUS_SUCCEEDED,
     publish_job_update,
     serialize_job,
+    symbolic_request_to_payload,
+    upsert_symbolic_cache,
 )
 from .models import Job
 from .database import get_engine
@@ -87,6 +90,9 @@ tracer = trace.get_tracer(__name__)
 settings = get_settings()
 
 _METRIC_NAMESPACE = settings.observability.metrics_namespace
+
+
+_symbolic_client: SymbolicEngineClient | None = None
 
 
 def _register_metric(name: str, factory):
@@ -294,6 +300,11 @@ async def _execute_job(
     start_time = time.perf_counter()
     redis = Redis.from_url(settings.redis.url, decode_responses=True)
     cache = JobCache(redis, settings.job.default_ttl_seconds, namespace=settings.job.cache_namespace)
+    symbolic_cache = SymbolicResultCache(
+        redis,
+        settings.symbolic.cache_ttl_seconds,
+        namespace=settings.symbolic.cache_namespace,
+    )
     engine = await get_engine(settings)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     resolved_queue = queue_name or settings.job.queue_name
@@ -331,27 +342,58 @@ async def _execute_job(
                     await _mark_running(session, job, cache, redis)
 
                     try:
-                        response = await _invoke_evaluator(job, trace_headers)
-                        result_payload = _build_result_payload(response)
-                        status = (
-                            STATUS_SUCCEEDED
-                            if result_payload.get("value") is not None
-                            else STATUS_FAILED
-                        )
-                        await _finalize_job(
-                            session,
-                            job,
-                            cache,
-                            redis,
-                            status=status,
-                            payload=result_payload,
-                        )
+                        if job.mode == "symbolic":
+                            (
+                                result_payload,
+                                cache_request_payload,
+                                verification_passed,
+                                verification_error,
+                            ) = await _process_symbolic_job(job)
+                            status = STATUS_SUCCEEDED
+                            job.verification_passed = verification_passed
+                            job.verification_error = verification_error
+                            await _finalize_job(
+                                session,
+                                job,
+                                cache,
+                                redis,
+                                status=status,
+                                payload=result_payload,
+                            )
+                            if job.symbolic_cache_key:
+                                await upsert_symbolic_cache(
+                                    session,
+                                    cache_key=job.symbolic_cache_key,
+                                    request_payload=cache_request_payload,
+                                    result_payload=result_payload,
+                                    verification_passed=verification_passed,
+                                    verification_error=verification_error,
+                                )
+                                await symbolic_cache.set(job.symbolic_cache_key, result_payload)
+                        else:
+                            response = await _invoke_evaluator(job, trace_headers)
+                            result_payload = _build_result_payload(response)
+                            status = (
+                                STATUS_SUCCEEDED
+                                if result_payload.get("value") is not None
+                                else STATUS_FAILED
+                            )
+                            await _finalize_job(
+                                session,
+                                job,
+                                cache,
+                                redis,
+                                status=status,
+                                payload=result_payload,
+                            )
+                            if status == STATUS_FAILED:
+                                _record_job_failure(
+                                    resolved_queue, result_payload.get("error") or "evaluator_error"
+                                )
                         span.set_attribute("job.status", status)
                         span.set_status(Status(StatusCode.OK))
                         duration_ms = (time.perf_counter() - start_time) * 1000.0
                         span.set_attribute("job.duration_ms", duration_ms)
-                        if status == STATUS_FAILED:
-                            _record_job_failure(resolved_queue, result_payload.get("error") or "evaluator_error")
                         queue_depth_after = await _refresh_queue_depth(redis, resolved_queue)
                         span.set_attribute("job.queue_depth_end", queue_depth_after)
                         _observe_task_runtime(resolved_queue, status, duration_ms)
@@ -533,6 +575,91 @@ async def _cache_and_publish(job: Job, cache: JobCache, redis: Redis) -> Dict[st
     await cache.set(job.id, payload)
     await publish_job_update(redis, job.id, payload, settings=settings)
     return payload
+
+
+def _get_symbolic_client() -> SymbolicEngineClient:
+    global _symbolic_client
+    if _symbolic_client is None:
+        _symbolic_client = SymbolicEngineClient(settings.symbolic)
+    return _symbolic_client
+
+
+async def _process_symbolic_job(
+    job: Job
+) -> tuple[Dict[str, Any], Dict[str, Any], Optional[bool], Optional[str]]:
+    client = _get_symbolic_client()
+    request_payload = dict(job.symbolic_payload or {})
+    if not request_payload:
+        request_payload = {
+            "operation": "simplify",
+            "expression": job.input_expression,
+            "context": {"variables": job.context},
+        }
+    request_payload.setdefault("expression", job.input_expression)
+
+    try:
+        result = await asyncio.to_thread(client.compute_sync, request_payload)
+    except SymbolicEngineError as exc:
+        raise JobExecutionError(str(exc)) from exc
+
+    verification_passed, verification_error = await _verify_symbolic_result(
+        job, result, request_payload
+    )
+    metadata = result.setdefault("metadata", {})
+    metadata["verification"] = {"passed": verification_passed, "error": verification_error}
+    return result, request_payload, verification_passed, verification_error
+
+
+async def _verify_symbolic_result(
+    job: Job, result_payload: Dict[str, Any], request_payload: Dict[str, Any]
+) -> tuple[Optional[bool], Optional[str]]:
+    context_payload = request_payload.get("context") or {}
+    variables = context_payload.get("variables") or {}
+    if not isinstance(variables, dict) or not variables:
+        return None, None
+
+    numeric_context: Dict[str, float] = {}
+    for key, value in variables.items():
+        try:
+            numeric_context[str(key)] = float(value)
+        except (TypeError, ValueError):
+            return None, "non_numeric_context"
+
+    canonical_expr = (result_payload.get("result") or {}).get("canonical")
+    if not canonical_expr:
+        return None, "missing_canonical"
+
+    original_value = await _evaluate_expression(job.input_expression, numeric_context)
+    canonical_value = await _evaluate_expression(canonical_expr, numeric_context)
+    if original_value is None or canonical_value is None:
+        return None, "verification_eval_failed"
+
+    tolerance = max(1.0, abs(original_value)) * 1e-6
+    if abs(original_value - canonical_value) <= tolerance:
+        return True, None
+    error_message = f"mismatch({original_value:.8f},{canonical_value:.8f})"
+    return False, error_message[:255]
+
+
+async def _evaluate_expression(expression: str, context: Dict[str, float]) -> Optional[float]:
+    stub = _get_sync_stub()
+    request = evaluator_pb2.EvaluateRequest(
+        expression=expression, context={k: str(v) for k, v in context.items()}
+    )
+    deadline = settings.evaluator.deadline_ms / 1000.0
+    try:
+        response = await asyncio.to_thread(
+            stub.Evaluate,
+            request,
+            timeout=deadline,
+            metadata=build_grpc_metadata(),
+        )
+    except grpc.RpcError:
+        return None
+    if response.WhichOneof("result") == "value":
+        return response.value
+    return None
+
 
 
 def _record_job_enqueued(queue_name: str) -> None:

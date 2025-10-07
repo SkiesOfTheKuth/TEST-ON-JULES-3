@@ -33,13 +33,14 @@
 - **Testing:** integration suite exercises multi-queue routing, policy enforcement, resilience paths, WebSocket streaming, and load thresholds.
 
 ## Phase 3 – Symbolic & Codegen Engine (Weeks 9-12)
+**Status:** Workstream 1 complete � symbolic engine service scaffold, sandbox runner, Docker packaging, and contract delivered. Workstreams 2-4 (gateway integration, observability/docs, CI/load) remain outstanding.
 
-- **SymbolicEngine Microservice:** FastAPI + SymPy + Numba/LLVM; endpoints for simplify, derivative, integral, solve, series, codegen.
-- **Sandboxing:** run expressions in restricted subprocess with seccomp + time/memory limits; support curated modules (SymPy, math, numpy).
-- **Result Types:** JSON payload containing symbolic form, LaTeX, numeric approximations, generated code (C, Python).
-- **Pipeline:** Gateway routes requests with `mode=symbolic` to SymbolicEngine via gRPC; fallback to SafeEvaluator for simple expressions.
-- **Caching & Verification:** store canonical forms in Postgres with hash keyed by AST; run quick numeric spot-checks to verify equivalence.
-- **Testing:** property tests comparing symbolic vs numerical results, regression suite for known identities, performance benchmarks.
+- [x] SymbolicEngine Microservice: FastAPI + SymPy scaffolding with endpoints for simplify, derivative, integral, solve, series, and codegen.
+- [x] Sandboxing: subprocess execution with timeout/memory guards (seccomp follow-up documented).
+- [x] Result Types: JSON payload now includes canonical form, LaTeX, approximations, and code generation outputs.
+- [x] Pipeline: Gateway routes `mode=symbolic` jobs to the symbolic service and falls back to the evaluator for arithmetic.
+- [x] Caching & Verification: Redis/Postgres cache keyed by symbolic hash with optional numeric verification recorded.
+- [ ] Testing: add deeper property/benchmark coverage for symbolic workloads.
 
 ## Phase 4 – Collaborative Workspace (Weeks 13-16)
 
