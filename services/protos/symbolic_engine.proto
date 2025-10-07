@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package symbolic;
+
+
+message SimplifyRequest {
+  string expression = 1;
+  repeated string variables = 2;
+  bool canonicalize = 3;
+  string method = 4;
+}
+
+message DerivativeRequest {
+  string expression = 1;
+  repeated string variables = 2;
+  string variable = 3;
+  int32 order = 4;
+  bool canonicalize = 5;
+}
+
+message IntegralRequest {
+  string expression = 1;
+  repeated string variables = 2;
+  string variable = 3;
+  string lower_limit = 4;
+  string upper_limit = 5;
+  bool canonicalize = 6;
+}
+
+message SolveRequest {
+  string equation = 1;
+  string variable = 2;
+  repeated string parameters = 3;
+  bool canonicalize = 4;
+}
+
+message SeriesRequest {
+  string expression = 1;
+  repeated string variables = 2;
+  string variable = 3;
+  string point = 4;
+  int32 order = 5;
+  bool canonicalize = 6;
+}
+
+message CodegenRequest {
+  string expression = 1;
+  repeated string variables = 2;
+  string target = 3;
+  string function_name = 4;
+  bool emit_header = 5;
+  bool canonicalize = 6;
+}
+
+message SymbolicMetadataEntry {
+  string key = 1;
+  string value = 2;
+}
+
+message SymbolicResponse {
+  string result = 1;
+  string latex = 2;
+  string canonical_form = 3;
+  repeated SymbolicMetadataEntry metadata = 4;
+}
+
+service SymbolicEngine {
+  rpc Simplify(SimplifyRequest) returns (SymbolicResponse);
+  rpc Derivative(DerivativeRequest) returns (SymbolicResponse);
+  rpc Integral(IntegralRequest) returns (SymbolicResponse);
+  rpc Solve(SolveRequest) returns (SymbolicResponse);
+  rpc Series(SeriesRequest) returns (SymbolicResponse);
+  rpc Codegen(CodegenRequest) returns (SymbolicResponse);
+}
