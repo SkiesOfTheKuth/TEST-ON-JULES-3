@@ -34,12 +34,12 @@
 
 ## Phase 3 – Symbolic & Codegen Engine (Weeks 9-12)
 
-- **SymbolicEngine Microservice:** FastAPI + SymPy + Numba/LLVM; endpoints for simplify, derivative, integral, solve, series, codegen.
-- **Sandboxing:** run expressions in restricted subprocess with seccomp + time/memory limits; support curated modules (SymPy, math, numpy).
-- **Result Types:** JSON payload containing symbolic form, LaTeX, numeric approximations, generated code (C, Python).
-- **Pipeline:** Gateway routes requests with `mode=symbolic` to SymbolicEngine via gRPC; fallback to SafeEvaluator for simple expressions.
-- **Caching & Verification:** store canonical forms in Postgres with hash keyed by AST; run quick numeric spot-checks to verify equivalence.
-- **Testing:** property tests comparing symbolic vs numerical results, regression suite for known identities, performance benchmarks.
+- **SymbolicEngine Microservice:** FastAPI + SymPy + Numba/LLVM; endpoints for simplify, derivative, integral, solve, series, codegen. **Status:** In progress – service scaffold, REST API, and gRPC proto delivered.
+- **Sandboxing:** run expressions in restricted subprocess with seccomp + time/memory limits; support curated modules (SymPy, math, numpy). **Status:** In progress – subprocess guard with resource limits and import denylist implemented; seccomp research documented.
+- **Result Types:** JSON payload containing symbolic form, LaTeX, numeric approximations, generated code (C, Python). **Status:** In progress – responses include canonical form, LaTeX, and codegen artifacts with sandbox diagnostics.
+- **Pipeline:** Gateway routes requests with `mode=symbolic` to SymbolicEngine via gRPC; fallback to SafeEvaluator for simple expressions. **Status:** Ready for integration – gRPC contract and gateway client stub provided.
+- **Caching & Verification:** store canonical forms in Postgres with hash keyed by AST; run quick numeric spot-checks to verify equivalence. **Status:** In progress – cache table migration added with canonical form support.
+- **Testing:** property tests comparing symbolic vs numerical results, regression suite for known identities, performance benchmarks. **Status:** In progress – unit tests cover operations, sandbox guards, and API error handling.
 
 ## Phase 4 – Collaborative Workspace (Weeks 13-16)
 

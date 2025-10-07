@@ -6,10 +6,11 @@ This repository tracks the calculator platform as it graduates from Phase 1 hard
 - Observability updates: refreshed Grafana dashboards (Gateway Overview, Phase 2 Queue Lanes, Worker Health) and new runbooks covering worker lifecycle, Redis recovery, policy tuning, and dashboard interpretation.
 
 ## Delivery Status
-- **Baseline Alignment (Weeks 0-1)** – Done. Repo hygiene, migrations, auth enforcement, rate limiting, and observability scaffolding merged.
-- **Phase 1 – Hardened Core Services (Weeks 2-4)** – Ongoing. Gateway/evaluator split ships with traces, metrics, and sandboxing. Outstanding: chaos/fuzz/load coverage and remaining sandbox hardening tasks.
-- **Phase 2 – Distributed Compute Backbone (Weeks 5-8)** – Complete. Celery orchestrator, heavy/GPU lanes, tenant policies, autoscaling runbooks, Grafana dashboards, and CI/CD validation are live.
-- **Phases 3-6** – Not started; roadmap items tracked in documentation.
+- **Baseline Alignment (Weeks 0-1)** â€“ Done. Repo hygiene, migrations, auth enforcement, rate limiting, and observability scaffolding merged.
+- `services/symbolic_engine`  SymPy-powered symbolic microservice with sandboxed execution, REST API, and gRPC contract.
+- **Phase 1 â€“ Hardened Core Services (Weeks 2-4)** â€“ Ongoing. Gateway/evaluator split ships with traces, metrics, and sandboxing. Outstanding: chaos/fuzz/load coverage and remaining sandbox hardening tasks.
+- **Phase 2 â€“ Distributed Compute Backbone (Weeks 5-8)** â€“ Complete. Celery orchestrator, heavy/GPU lanes, tenant policies, autoscaling runbooks, Grafana dashboards, and CI/CD validation are live.
+- **Phases 3-6** â€“ Not started; roadmap items tracked in documentation.
 
 ## Immediate Next Actions
 1. Close remaining Phase 1 hardening gaps (chaos, fuzzing, deeper sandbox security) before expanding to symbolic workloads.
@@ -30,17 +31,17 @@ This repository tracks the calculator platform as it graduates from Phase 1 hard
 - Grafana dashboards and runbooks for new metrics live under `observability/`; export updates as JSON when panels change.
 
 ## Repo Map
-- `services/gateway` – FastAPI gateway, Celery orchestration, policy engine, tests (unit + integration), scripts.
-- `services/safe_evaluator` – Sandbox service, allowlist management, telemetry.
-- `libs/` – Shared calculator logic packages consumed by the gateway/evaluator.
-- `docs/` – Roadmap, operations, security, architecture, maintenance guide.
-- `observability/` – Grafana dashboards, Prometheus config, Tempo/Loki provisioning.
-- `tests/load` – Locust performance harness with configurable thresholds.
+- `services/gateway` â€“ FastAPI gateway, Celery orchestration, policy engine, tests (unit + integration), scripts.
+- `services/safe_evaluator` â€“ Sandbox service, allowlist management, telemetry.
+- `libs/` â€“ Shared calculator logic packages consumed by the gateway/evaluator.
+- `docs/` â€“ Roadmap, operations, security, architecture, maintenance guide.
+- `observability/` â€“ Grafana dashboards, Prometheus config, Tempo/Loki provisioning.
+- `tests/load` â€“ Locust performance harness with configurable thresholds.
 
 ## Helpful Commands
-- `make compose-phase2-up` / `make compose-phase2-down` – Launch or stop the full Phase 2 stack.
-- `make integration` – CI parity spin-up + integration suite.
-- `API_KEY=<key> make load-test` – Run Locust against the async job API (thresholds enforced).
-- `poetry -C services/gateway run python scripts/autoscale_workers.py --queue-depth 120 --active-workers 3` – Evaluate autoscaling decisions (pass `--apply` to grow/shrink worker pools).
+- `make compose-phase2-up` / `make compose-phase2-down` â€“ Launch or stop the full Phase 2 stack.
+- `make integration` â€“ CI parity spin-up + integration suite.
+- `API_KEY=<key> make load-test` â€“ Run Locust against the async job API (thresholds enforced).
+- `poetry -C services/gateway run python scripts/autoscale_workers.py --queue-depth 120 --active-workers 3` â€“ Evaluate autoscaling decisions (pass `--apply` to grow/shrink worker pools).
 
 Keep this README aligned with roadmap status, CI guarantees, and operational expectations as the platform advances toward Phase 3.

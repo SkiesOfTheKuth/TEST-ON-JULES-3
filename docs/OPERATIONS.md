@@ -3,7 +3,7 @@
 ## Phase 2 Stack Overview
 - **Gateway** (`services/gateway`): FastAPI service exposing synchronous `/calculate` and asynchronous `/jobs` APIs, policy engine, Celery orchestration, and WebSocket notifications.
 - **Safe Evaluator** (`services/safe_evaluator`): gRPC sandbox that validates expressions, enforces complexity budgets, and executes computations in an isolated runtime.
-- **Workers**: Three Celery worker profiles launched via Compose—`worker-standard`, `worker-priority` (heavy math lane), and `worker-gpu` (GPU lane). All publish status updates back to Redis and Prometheus.
+- **Workers**: Three Celery worker profiles launched via Composeâ€”`worker-standard`, `worker-priority` (heavy math lane), and `worker-gpu` (GPU lane). All publish status updates back to Redis and Prometheus.
 - **Backing services**: Postgres (API keys, job ledger, policy records), Redis (broker, cache, policy store), and the observability suite (Tempo, Prometheus, Loki, Grafana).
 
 ## Bootstrapping
@@ -109,7 +109,7 @@
 4. Re-run the offending workload and confirm `calculator_gateway_policy_decisions_total{decision="allow"}` increments while violations stop climbing. Keep traces handy to ensure rerouted queues (`job.queue_name`) align with expectations.
 
 ### Dashboard Guide
-- **Gateway Overview** (`http://localhost:3000/d/Gateway/gateway-overview` – credentials `admin`/`grafana`): track inbound request health. Red thresholds on request rate or p95 latency signal API-side stress.
+- **Gateway Overview** (`http://localhost:3000/d/Gateway/gateway-overview` â€“ credentials `admin`/`grafana`): track inbound request health. Red thresholds on request rate or p95 latency signal API-side stress.
 - **Phase 2 Queue Lanes** (`uid: phase2-queue`): watch per-lane depth, enqueue throughput, and `calculator_gateway_autoscale_events_total`. Use this view when tuning worker counts or investigating backlog complaints.
 - **Worker Health** (`uid: worker-health`): surface `calculator_gateway_worker_up` heartbeats, queue wait histograms, and failure reasons. Correlate with Celery logs for flaky hosts.
 - **Tempo traces**: search by `job.id` and inspect span attributes (`calculator.queue`, `calculator.policy_outcome`) to diagnose per-job latency.
@@ -131,9 +131,31 @@
   API_KEY=<key> make load-test
   ```
   Tunable environment variables:
-  - `LOCUST_MAX_P95_MS` (default `750`) – allowable p95 response time.
-  - `LOCUST_MIN_RPS` (default `5`) – minimum aggregate throughput.
-  - `LOCUST_MAX_FAILURE_RATIO` (default `0.05`) – acceptable failure rate.
+Keep this document aligned with every platform change. Run `scripts/ensure_changelog_updated.py` locally if unsure whether a changelog entry is required.
+
+## Symbolic Engine Service
+
+- **Install dependencies:**
+  ```bash
+  poetry -C services/symbolic_engine install
+  ```
+- **Run locally:**
+  ```bash
+  poetry -C services/symbolic_engine run uvicorn app.main:app --reload --port 8082
+  ```
+- **Execute unit tests:**
+  ```bash
+  poetry run pytest services/symbolic_engine/tests
+  ```
+- **Build container image:**
+  ```bash
+  docker build -t symbolic_engine services/symbolic_engine
+  ```
+- **Sandbox guardrails:** Symbolic operations execute in a dedicated subprocess (`sandbox_runner`) that applies CPU and memory limits, guards suspicious tokens (`__`, `import`, `eval`, `exec`, `os`, `subprocess`), and enforces an import denylist before running SymPy. Seccomp integration is planned for a follow-up; enabling it requires loading a BPF profile (via `seccomp`/`libseccomp`) before delegating to SymPy. The profile draft lives in `docs/security/sandbox-seccomp.md` for future updates.
+- **Configuration knobs:** `SYMBOLIC_ENGINE_SANDBOX_TIMEOUT_SECONDS`, `SYMBOLIC_ENGINE_SANDBOX_MEMORY_LIMIT_MB`, and `SYMBOLIC_ENGINE_DEFAULT_CODEGEN_TARGET` tune subprocess limits and default code generation language.
+- **gRPC contract:** `services/protos/symbolic_engine.proto` defines the canonical service contract; stubs live beside the proto. Gateway integration uses `services/gateway/app/clients/symbolic.py`.
+  - `LOCUST_MIN_RPS` (default `5`) â€“ minimum aggregate throughput.
+  - `LOCUST_MAX_FAILURE_RATIO` (default `0.05`) â€“ acceptable failure rate.
   Failure to meet thresholds raises an exception and exits with non-zero status.
 
 ## Release Readiness Checklist
