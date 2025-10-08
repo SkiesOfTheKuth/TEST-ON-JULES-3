@@ -50,7 +50,7 @@ def api_key() -> str:
     return key
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="function")
 async def redis_client(settings: GatewaySettings) -> Redis:
     client = Redis.from_url(settings.redis.url, decode_responses=True)
     try:
@@ -59,14 +59,14 @@ async def redis_client(settings: GatewaySettings) -> Redis:
         await client.close()
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="function")
 async def http_client(base_url: str, api_key: str) -> httpx.AsyncClient:
     headers = {"X-Api-Key": api_key}
     async with httpx.AsyncClient(base_url=base_url, headers=headers, timeout=10.0) as client:
         yield client
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="function")
 async def tenant_name() -> str:
     async with session_scope() as session:
         result = await session.execute(select(APIKey.owner).limit(1))

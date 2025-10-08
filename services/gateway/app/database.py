@@ -17,22 +17,28 @@ from .models import Base
 
 _engine: AsyncEngine | None = None
 _Session: async_sessionmaker[AsyncSession] | None = None
+_engine_loop: asyncio.AbstractEventLoop | None = None
 _migration_lock: asyncio.Lock | None = None
 _migrations_ran = False
 
 
 async def get_engine(settings: GatewaySettings | None = None) -> AsyncEngine:
-    global _engine
-    if _engine is None:
+    global _engine, _Session, _engine_loop
+    loop = asyncio.get_running_loop()
+    if _engine is None or _engine_loop is None or _engine_loop is not loop:
         settings = settings or get_settings()
+        if _engine is not None and _engine_loop is not loop:
+            await _engine.dispose()
         _engine = create_async_engine(settings.database.url, pool_size=settings.database.pool_size)
+        _Session = None
+        _engine_loop = loop
     return _engine
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     global _Session
+    engine = await get_engine()
     if _Session is None:
-        engine = await get_engine()
         _Session = async_sessionmaker(engine, expire_on_commit=False)
     async with _Session() as session:
         yield session

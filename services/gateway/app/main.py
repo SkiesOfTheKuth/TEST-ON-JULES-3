@@ -7,6 +7,7 @@ import inspect
 import json
 import logging
 import time
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
@@ -55,14 +56,9 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 configure_logging(settings)
 configure_tracing(settings)
-app = FastAPI(title="Calculator Gateway", version="1.0.0")
-instrument_app(app, settings)
 
-tracer = trace.get_tracer(__name__)
-
-
-@app.on_event("startup")
-async def startup_event() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.redis = Redis.from_url(settings.redis.url, decode_responses=True)
     app.state.cache = ResultCache(
@@ -109,14 +105,18 @@ async def startup_event() -> None:
     await init_db(settings)
     app.state.grpc_channel = create_async_channel(settings.evaluator)
     app.state.grpc_stub = evaluator_pb2_grpc.EvaluatorStub(app.state.grpc_channel)
-    logger.info("Gateway started on %s:%s", settings.host, settings.port)
+    logger.info('Gateway started on %s:%s', settings.host, settings.port)
+    try:
+        yield
+    finally:
+        await app.state.redis.close()
+        await app.state.grpc_channel.close()
 
 
-@app.on_event("shutdown")
-async def shutdown_event() -> None:
-    redis: Redis = app.state.redis
-    await redis.close()
-    await app.state.grpc_channel.close()
+app = FastAPI(title="Calculator Gateway", version="1.0.0", lifespan=lifespan)
+instrument_app(app, settings)
+
+tracer = trace.get_tracer(__name__)
 
 
 async def require_api_key(

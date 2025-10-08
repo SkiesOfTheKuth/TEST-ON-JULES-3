@@ -16,7 +16,7 @@ services:
       POSTGRES_USER: calculator
       POSTGRES_PASSWORD: calculator
     ports:
-      - "5432:5432"
+      - "${HOST_POSTGRES_PORT:-35432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U calculator"]
       interval: 5s

@@ -1,6 +1,6 @@
 # 04 Observability and Operations
 
-Last Updated: 2025-10-07 (commit a6e34c0)
+Last Updated: 2025-10-08 (commit 59cb599)
 
 ## Metrics
 - **Gateway Prometheus endpoint**: http://localhost:8080/metrics
@@ -15,7 +15,7 @@ Last Updated: 2025-10-07 (commit a6e34c0)
   and sandbox duration (pushes to Tempo/Prometheus when OTEL endpoint configured).
 
 ## Tracing
-- OpenTelemetry exporters configured via pp/instrumentation.py.
+- OpenTelemetry exporters configured via app/instrumentation.py.
 - Spans include attributes:
   - calculator.job_id
   - calculator.queue_name

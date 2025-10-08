@@ -28,7 +28,7 @@
   - Gateway API: `http://localhost:8080`
   - Grafana: `http://localhost:3000` (`admin` / `grafana`)
   - Redis: `localhost:6379`
-  - Postgres: `localhost:5432` (`calculator` / `calculator`)
+  - Postgres: `localhost:35432` (override via `HOST_POSTGRES_PORT`) (`calculator` / `calculator`)
 
 - Tear everything down, including volumes:
   ```bash

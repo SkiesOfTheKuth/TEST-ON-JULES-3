@@ -51,7 +51,7 @@ services:
       POSTGRES_PASSWORD: calculator
       POSTGRES_DB: calculator
     ports:
-      - "5432:5432"
+      - "${HOST_POSTGRES_PORT:-35432}:5432"
     networks:
       - calc-platform-net
 

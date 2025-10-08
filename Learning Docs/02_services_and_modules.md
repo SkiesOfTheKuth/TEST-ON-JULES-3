@@ -1,19 +1,20 @@
 # 02 Services and Modules
 
-Last Updated: 2025-10-07 (commit a6e34c0)
+Last Updated: 2025-10-08 (commit 59cb599)
 
 ## Gateway (services/gateway)
 - **Role**: API gateway, job orchestrator, policy gatekeeper, metrics exporter, WebSocket notifier.
-- **Entry point**: pp/main.py (FastAPI app + lifespan hooks pending refactor).
+- **Entry point**: app/main.py (FastAPI app using a lifespan context for startup/shutdown resource management).
 - **Key modules**:
-  - pp/config.py: Pydantic settings for database, Redis, Celery, policy, autoscale, symbolic integration.
-  - pp/models.py: SQLAlchemy ORM (API keys, jobs, quotas, tenant policies, symbolic cache entries).
-  - pp/policy.py: Loads tenant policy snapshots, enforces queue access, bans, runtime ceilings.
-  - pp/task_queue.py: Celery app factory, metrics instrumentation, worker task definitions, failover handlers.
-  - pp/jobs.py: Job creation, serialization, cache helpers, WebSocket broadcast.
-  - pp/symbolic_client.py: REST/gRPC client for symbolic engine with retry/backoff, verification helper.
-  - pp/autoscale.py: Decision helper for manual or automated scaling.
-  - pp/time_utils.py: Centralised timezone-aware timestamp helper (UTC).
+  - app/config.py: Pydantic settings for database, Redis, Celery, policy, autoscale, symbolic integration.
+  - app/models.py: SQLAlchemy ORM (API keys, jobs, quotas, tenant policies, symbolic cache entries).
+  - app/policy.py: Loads tenant policy snapshots, enforces queue access, bans, runtime ceilings.
+  - app/task_queue.py: Celery app factory, metrics instrumentation, worker task definitions, failover handlers.
+  - app/jobs.py: Job creation, serialization, cache helpers, WebSocket broadcast.
+  - app/symbolic_client.py: REST/gRPC client for symbolic engine with retry/backoff, verification helper.
+  - app/autoscale.py: Decision helper for manual or automated scaling.
+  - app/time_utils.py: Centralised timezone-aware timestamp helper (UTC).
+- **Lifespan orchestration**: Startup initialises Redis caches, rate limiters, quota config, applies Alembic migrations, and opens the evaluator gRPC channel; shutdown closes Redis connections and the gRPC channel.
 - **Config surface**: .env.* feed Pydantic settings; secrets manageable via environment variables in container/k8s.
 - **Why this split**: Keeps HTTP concerns, data model, queue orchestration, and policy logic modular so unit tests can stub each piece.
 
@@ -26,11 +27,11 @@ Last Updated: 2025-10-07 (commit a6e34c0)
 ## Symbolic Engine (services/symbolic_engine)
 - **Role**: Exposes SymPy operations (simplify, derivative, integral, solve, series, code-gen) via FastAPI.
 - **Structure**:
-  - pp/main.py: FastAPI router, health endpoints, /symbolic/compute handler.
-  - pp/operations.py: Implementation of supported symbolic operations, optional Numba acceleration.
-  - pp/sandbox.py: Subprocess worker enforcing timeout/memory limits.
-  - pp/models.py: Pydantic request/response schemas (operation enum, context, code generation options).
-  - Tests under 	ests/ cover API responses, sandbox behaviour, and edge cases.
+  - app/main.py: FastAPI router, health endpoints, /symbolic/compute handler.
+  - app/operations.py: Implementation of supported symbolic operations, optional Numba acceleration.
+  - app/sandbox.py: Subprocess worker enforcing timeout/memory limits.
+  - app/models.py: Pydantic request/response schemas (operation enum, context, code generation options).
+  - Tests under tests/ cover API responses, sandbox behaviour, and edge cases.
 - **Deployment**: Standalone Dockerfile; included in docker-compose.phase2.yml with dedicated Celery worker worker-symbolic.
 - **Why separate service**: Allows tuning runtimes/resources independent from arithmetic workers, isolates heavier dependencies, keeps gateway lean.
 
@@ -40,10 +41,10 @@ Last Updated: 2025-10-07 (commit a6e34c0)
 - Path-based dependencies registered in gateway Poetry config for editable installs.
 
 ## Infrastructure Modules
-- **Celery**: Configured in pp/task_queue.py; routing maps to queues (calculator-jobs, calculator-jobs-heavy, calculator-jobs-gpu, calculator-jobs-symbolic).
-- **Postgres migrations**: Alembic revisions in services/gateway/alembic/versions. lembic/script.py shim exists for lightweight unit tests.
-- **Redis caches**: pp/cache.py centralises Redis namespaces (job metadata, symbolic cache, policy cache).
-- **Observability**: pp/instrumentation.py wires OpenTelemetry tracing, Prometheus metrics (via Instrumentator), and structured logging.
+- **Celery**: Configured in app/task_queue.py; routing maps to queues (calculator-jobs, calculator-jobs-heavy, calculator-jobs-gpu, calculator-jobs-symbolic).
+- **Postgres migrations**: Alembic revisions in services/gateway/alembic/versions. alembic/script.py shim exists for lightweight unit tests.
+- **Redis caches**: app/cache.py centralises Redis namespaces (job metadata, symbolic cache, policy cache).
+- **Observability**: app/instrumentation.py wires OpenTelemetry tracing, Prometheus metrics (via Instrumentator), and structured logging.
 - **Protos**: services/protos/symbolic_engine.proto defines gRPC contract stub for future binary transports (currently REST).
 
 ## Why These Dependencies

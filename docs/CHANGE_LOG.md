@@ -2,6 +2,7 @@
 
 | Date       | Area        | Summary                                                              | Links |
 |------------|-------------|----------------------------------------------------------------------|-------|
+| 2025-10-08 | phase3 | Switch compose Postgres binding to 35432 with HOST_POSTGRES_PORT support; migrate gateway startup to FastAPI lifespan and ensure safe evaluator images include shared services/common modules. | TBA   |
 | 2025-10-07 | phase3 | Harden symbolic submission (Redis cache init, rate limiter fallback, quota txn fix, compose smoke) | TBA   |
 | 2025-10-07 | phase3 | Replace naive utc timestamps with timezone-aware helper; compose smoke validated symbolic job flow. | TBA   |
 | 2025-10-05 | documentation | Add documentation maintenance guide, agent checklist, roadmap cross-links, project status README. | TBA   |

@@ -11,6 +11,7 @@ COPY services/safe_evaluator/pyproject.toml /tmp/evaluator/
 COPY services/safe_evaluator/README.md /tmp/evaluator/
 COPY services/safe_evaluator/app /tmp/evaluator/app
 COPY services/protos /tmp/evaluator/services/protos
+COPY services/common /tmp/evaluator/services/common
 COPY calculator_grpc /tmp/evaluator/calculator_grpc
 COPY libs /tmp/libs
 RUN mkdir -p /libs && cp -r /tmp/libs/* /libs/
@@ -23,6 +24,7 @@ FROM base AS runtime
 COPY --from=builder /install /usr/local
 COPY services/safe_evaluator/app /app/app
 COPY services/protos /app/services/protos
+COPY services/common /app/services/common
 COPY calculator_grpc /app/calculator_grpc
 ENV PYTHONPATH="/app"
 ENV EVALUATOR_HOST=0.0.0.0

@@ -1,6 +1,6 @@
 # 05 CI/CD and Quality Gates
 
-Last Updated: 2025-10-07 (commit a6e34c0)
+Last Updated: 2025-10-08 (commit 59cb599)
 
 ## Workflow Overview
 - **Primary pipeline**: .github/workflows/phase1-ci.yml
@@ -8,7 +8,8 @@ Last Updated: 2025-10-07 (commit a6e34c0)
   2. **integration**: boots docker-compose stack (gateway, evaluator, workers,
      Redis, Postgres, observability), applies migrations, seeds API key, executes
      integration pytest suite.
-  3. **load-test (optional)**: Locust smoke behind manual trigger or un-load-tests label.
+  3. **load-test (optional)**: Locust smoke behind manual trigger or 
+un-load-tests label.
   4. **Ensure changelog**: invokes scripts/ensure_changelog_updated.py to block
      PRs that skip docs/CHANGE_LOG.md.
 
@@ -16,6 +17,7 @@ Last Updated: 2025-10-07 (commit a6e34c0)
 - make lint -> ruff on gateway + evaluator.
 - make unit -> gateway/evaluator pytest (excludes integration).
 - make integration -> compose stack + integration suite (same as CI).
+- Compose exposes Postgres on host port 35432 by default (`HOST_POSTGRES_PORT` env var) so integration runs avoid clashing with local Postgres services.
 - API_KEY=<key> make load-test -> Locust headless run with thresholds.
 
 ## Test Suites
