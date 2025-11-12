@@ -62,6 +62,12 @@ class TestCalculator(unittest.TestCase):
     def test_tan(self):
         self.assertAlmostEqual(tan(0), 0)
         self.assertAlmostEqual(tan(45), 1)
+        with self.assertRaises(ValueError):
+            tan(90)
+        with self.assertRaises(ValueError):
+            tan(270)
+        with self.assertRaises(ValueError):
+            tan(-90)
 
     def test_log(self):
         self.assertAlmostEqual(log(1), 0)
